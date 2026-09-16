@@ -11,7 +11,7 @@
 3. ✅ **已上线生产**（33333，`sub2api:stable`）
 4. ✅ **月报类型**（2026-09-16）：迁移 233 放宽 CHECK；月报固定覆盖 ref 的**上一个自然月**（每月 1 日 20:20 生成上月，手动生成语义一致）；聚合优先级：当月周报 → 当月日报 → prompt 片段
 5. ✅ **LLM 总结 prompt 重写 ×2**（2026-09-16）：最终格式对齐团队模板——**标题由后端拼**（`reportTitle()`，姓名取 users.username，如 `# 工作日报（2026-09-15）- 谢翔宇`），LLM 只输出两个小节（`## 一、今日/本周/本月核心工作` + `## 二、明日/下周/下月工作计划`，平铺编号条目，无分类/优先级标注）；素材规则保留噪音过滤/合并同类/量化/脱敏；`ReportRepository.GetUsername()` 新增
-6. ✅ **报告素材双通道**（2026-09-16 晚）：①`FetchUserTurns` 逐请求头部提取用户真实输入（剥 <system-reminder> 前缀+噪音过滤+去重）——普通聊天/Claude Code 客户端有效；②`FetchPromptSnapshots`+对话区窗口采样（锚点 `</available_skills>` 后，全天 4 快照×8 窗口×700 字）——opencode 等智能体客户端用户输入埋在历史深处、且 reminder 字符串会出现在系统提示词讲解和文件内容里导致正则剥离不可靠，只能靠窗口采样。system prompt 含 ❌/✅ 反例（禁止'用了什么工具/模式/多少请求'类条目）。验证：谢翔宇 9/16 预览输出已为真实工作条目
+6. ✅ **报告素材双通道**（2026-09-16 晚）：①`FetchUserTurns` 逐请求头部提取用户真实输入（剥 <system-reminder> 前缀+噪音过滤+去重）——普通聊天/Claude Code 客户端有效；②`FetchPromptSnapshots`+对话区窗口采样（锚点 `</available_skills>` 后，全天 4 快照×8 窗口×700 字）——opencode 等智能体客户端用户输入埋在历史深处、且 reminder 字符串会出现在系统提示词讲解和文件内容里导致正则剥离不可靠，只能靠窗口采样。system prompt 含 ❌/✅ 反例（禁止'用了什么工具/模式/多少请求'类条目）。验证：谢翔宇 9/16 预览输出已为真实工作条目。**已知限制**：①单 session 超 64k 时审计截断丢最新几轮（仅保头部，opencode 客户端压缩可部分缓解）；②快照按全天序号均匀选取、未按 session 分组——多 session 用户可能漏 session，待办第 1 项解决
 7. ✅ **审计表 session 维度**（2026-09-16 晚）：迁移 234 给 prompt_audit_jobs/events 加 session_id（取自请求头 `ExtractClientSessionID` 单一入口），部分索引 (user_id, session_id, created_at)；Request→job→event 全链路穿透。注意：session_id 与 usage_logs 同源（客户端上报），历史数据为空
 6. ⏸ **飞书推送**：暂缓
 
@@ -107,12 +107,19 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 
 ## 8. 待办
 
-- [ ] 用户验证：33333 网页登录 → "日报周报月报"页 → 手动生成日/周/月三种报告（月报默认生成**上月**，即 2026-08）
-- [ ] 验证今晚 20:00 定时日报自动生成（reports 表应出现当日记录）
-- [ ] 验证本周五 20:10 首次周报 + 10 月 1 日 20:20 首次月报（月报应聚合 9 月的周报摘要）
-- [x] push 到 fork 完成（CGKBAI/sub2api，2026-09-15）
+- [ ] **【下一步·已确认方案】快照选取改为 session 感知**：`FetchPromptSnapshots`（backend/internal/repository/report_repo.go）重写——
+  ① `session_id <> ''` 的行 `GROUP BY session_id` 各取 `created_at` 最大一条（= 该 session 最全快照；session 数上限 8，超过取最近 8 个）；
+  ② `session_id = ''` 的行（历史数据/无会话头客户端）保留现有 `rn % (total/count)` 均匀分布兜底；
+  ③ 两路合并按时间正序返回。service 层窗口预算按 session 均分（总 ~32 窗、每 session ≤8 窗 ×700 字，report_service.go 常量 `reportSnapshotCount`/`conversationWindowsPerSnap` 相应调整）。
+  背景与实测：多 session 是常态（2026-09-16 usage_logs：user 5/6/8 各 3 个 session、user 2 两个）；当前②通道按全天请求序号 25%/50%/75%/100% 取快照，多 session 时可能漏整个 session 的对话区。
+  注意：9/16 白天旧数据 session_id 为空（迁移 234 之前），重生成走兜底路径效果与现状相同；session 分组对当晚 20:00 后的新数据生效。改完：单测 + go build + buildx 镜像 → 33336 冒烟 → 发 stable → commit + push fork（流程见 §4）
+- [ ] 用户验证：33333 网页登录 → "日报周报月报"页 → 日期选 2026-09-16 → "为所有活跃用户生成"，确认日报为真实工作条目（双通道已用真实数据预览验证：谢翔宇输出"调研 work-report 模板库/梳理 report 代码/规划整合方案"等真实条目）
+- [ ] 验证当晚 20:00 定时日报自动生成（新 prompt + 双通道素材 + 修好的 /v1 base_url）
+- [ ] 验证周五 20:10 首次周报 + 10 月 1 日 20:20 首次月报（月报聚合当月周报）
+- [x] push 到 fork 完成（CGKBAI/sub2api，2026-09-15；最新 f1c1e5fb2）
 - [x] 月报类型 + 模板化 LLM prompt 上线（2026-09-16）
-- [ ] （后续迭代）AI 总结 skill 深化：当前 prompt 已含噪音过滤指令，可再评估报告质量决定是否做输入侧过滤（区分"用户真实输入"优先级段 vs 工具注入大段噪音）
+- [x] 双通道报告素材 + 审计 session_id 入库（2026-09-16 晚，commit 40ab07449）
+- [x] LLM 配置修复：base_url 补 /v1、max_prompts=60、truncate=800（SQL 直改 settings 已生效）
 - [ ] （后续迭代）飞书推送
 
 ## 9. 环境速记
