@@ -3,7 +3,7 @@ export default {
     title: 'Reports',
     description:
       'Per-user request statistics with AI work summaries; content comes from usage logs and prompt audit (prompts are included only after async audit is enabled).',
-    tabs: { daily: 'Daily', weekly: 'Weekly' },
+    tabs: { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' },
     filters: {
       date: 'Date',
       user: 'User ID',
@@ -43,6 +43,7 @@ export default {
       truncateChars: 'Truncate each prompt to characters',
       dailySchedule: 'Daily cron (min hour dom mon dow)',
       weeklySchedule: 'Weekly cron (min hour dom mon dow)',
+      monthlySchedule: 'Monthly cron (1st of month, previous month)',
       save: 'Save',
       cancel: 'Cancel',
       saved: 'Saved'

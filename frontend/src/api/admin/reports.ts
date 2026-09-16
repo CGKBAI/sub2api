@@ -16,11 +16,13 @@ export interface ReportStats {
   prompt_count: number
 }
 
+export type ReportType = 'daily' | 'weekly' | 'monthly'
+
 export interface Report {
   id: number
   user_id: number
   username: string
-  type: 'daily' | 'weekly'
+  type: ReportType
   period_start: string
   period_end: string
   stats: ReportStats
@@ -40,10 +42,11 @@ export interface ReportLLMConfig {
   prompt_truncate_chars: number
   daily_schedule: string
   weekly_schedule: string
+  monthly_schedule: string
 }
 
 export interface ReportListFilters {
-  type?: 'daily' | 'weekly'
+  type?: ReportType
   user_id?: number
   date?: string
 }
@@ -67,7 +70,7 @@ export async function getById(id: number): Promise<Report> {
 }
 
 export async function generate(request: {
-  type: 'daily' | 'weekly'
+  type: ReportType
   user_id: number
   date?: string
 }): Promise<Report> {
@@ -76,7 +79,7 @@ export async function generate(request: {
 }
 
 export async function generateAll(request: {
-  type: 'daily' | 'weekly'
+  type: ReportType
   date?: string
 }): Promise<{ generated: number; error: string }> {
   const { data } = await apiClient.post<{ generated: number; error: string }>(

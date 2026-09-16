@@ -36,6 +36,8 @@ func NewReportService(reportRepo ReportRepository, settingRepo SettingRepository
 }
 
 // ReportPeriod 根据报告类型与基准时间计算周期边界 [start, end)。
+// 月报固定覆盖 ref 的上一个自然月：每月 1 日定时生成上月，手动生成语义一致
+//（如 ref 在 9 月任意一天 → 生成 8 月月报，8 月月报用 9 月任意日期可重试）。
 func ReportPeriod(reportType string, ref time.Time) (time.Time, time.Time, error) {
 	switch reportType {
 	case domain.ReportTypeDaily:
@@ -44,12 +46,15 @@ func ReportPeriod(reportType string, ref time.Time) (time.Time, time.Time, error
 	case domain.ReportTypeWeekly:
 		start := timezone.StartOfWeek(ref)
 		return start, start.Add(7 * 24 * time.Hour), nil
+	case domain.ReportTypeMonthly:
+		end := timezone.StartOfMonth(ref)
+		return end.AddDate(0, -1, 0), end, nil
 	default:
 		return time.Time{}, time.Time{}, domain.ErrReportInvalidType
 	}
 }
 
-// GenerateReport 为单个用户生成指定周期（日/周）的报告。
+// GenerateReport 为单个用户生成指定周期（日/周/月）的报告。
 // 已存在同周期报告时覆盖更新（手动重试语义）。
 func (s *ReportService) GenerateReport(ctx context.Context, userID int64, reportType string, ref time.Time) (*Report, error) {
 	if s == nil || s.reportRepo == nil {
@@ -92,7 +97,7 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 		return nil, err
 	}
 
-	summary, llmErr := s.buildSummary(ctx, cfg, reportType, start, end, userID, stats)
+	summary, llmErr := s.buildSummary(ctx, cfg, reportType, start, end, userID, &stats)
 	if llmErr != nil {
 		if errors.Is(llmErr, domain.ErrReportLLMNotConfigured) {
 			// LLM 未配置：产出纯统计报告，不算失败
@@ -101,11 +106,13 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 			report.Status = domain.ReportStatusFailed
 			report.Error = truncateReportError(llmErr.Error())
 			report.AISummary = ""
+			report.Stats = stats
 			return s.persist(ctx, report)
 		}
 	}
 	report.AISummary = summary
 	report.Error = ""
+	report.Stats = stats
 	return s.persist(ctx, report)
 }
 
@@ -158,7 +165,7 @@ func (s *ReportService) ListReports(ctx context.Context, params pagination.Pagin
 	if s == nil || s.reportRepo == nil {
 		return nil, nil, errors.New("report repository not initialized")
 	}
-	if filters.Type != "" && filters.Type != domain.ReportTypeDaily && filters.Type != domain.ReportTypeWeekly {
+	if filters.Type != "" && filters.Type != domain.ReportTypeDaily && filters.Type != domain.ReportTypeWeekly && filters.Type != domain.ReportTypeMonthly {
 		return nil, nil, domain.ErrReportInvalidType
 	}
 	return s.reportRepo.List(ctx, params, filters)
@@ -195,40 +202,33 @@ func (s *ReportService) persist(ctx context.Context, r *Report) (*Report, error)
 }
 
 // buildSummary 组装 LLM 上下文并调用模型。
+// 周报聚合本周日报摘要；月报优先聚合当月周报摘要、降级聚合当月日报摘要；
+// 聚合不到子报告时与日报一致：直接拉取周期内 prompt 片段。
 func (s *ReportService) buildSummary(
 	ctx context.Context,
 	cfg *ReportLLMConfig,
 	reportType string,
 	start, end time.Time,
 	userID int64,
-	stats ReportStats,
+	stats *ReportStats,
 ) (string, error) {
-	systemPrompt := "你是团队 AI 网关的工作报告助手。根据用户在网关上的请求统计与 prompt 片段，" +
-		"用简体中文输出一份结构清晰的 Markdown 报告，包含：## 工作内容要点（推测用户做了什么，3-6 条）、" +
-		"## 活跃模型（简述）、## 备注（异常或建议，可省略）。" +
-		"严禁输出 prompt 原文中的密钥、token、密码等敏感信息；只做摘要，不逐条复述。"
+	systemPrompt := reportSystemPrompt(reportType)
 
 	var userPrompt strings.Builder
 	userPrompt.WriteString(fmt.Sprintf("周期：%s ~ %s\n", start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04")))
 
-	// 周报：优先用本周各日报的摘要二次压缩（省 token）
-	if reportType == domain.ReportTypeWeekly {
-		dailies, _, err := s.reportRepo.List(ctx, pagination.PaginationParams{Page: 1, PageSize: 7}, ReportListFilters{
-			Type:      domain.ReportTypeDaily,
-			UserID:    userID,
-			StartDate: start,
-			EndDate:   end,
-		})
-		if err == nil {
-			for i := range dailies {
-				d := &dailies[i]
-				if d.AISummary == "" {
-					continue
-				}
-				userPrompt.WriteString(fmt.Sprintf("\n### %s 日报摘要\n%s\n", d.PeriodStart.Format("2006-01-02"), d.AISummary))
-			}
+	aggregated := false
+	switch reportType {
+	case domain.ReportTypeWeekly:
+		aggregated = s.appendSubReports(ctx, &userPrompt, domain.ReportTypeDaily, start, end, 7, userID)
+	case domain.ReportTypeMonthly:
+		aggregated = s.appendSubReports(ctx, &userPrompt, domain.ReportTypeWeekly, start, end, 6, userID)
+		if !aggregated {
+			aggregated = s.appendSubReports(ctx, &userPrompt, domain.ReportTypeDaily, start, end, 31, userID)
 		}
-	} else if cfg.Enabled || (cfg.BaseURL != "" && cfg.APIKey != "" && cfg.Model != "") {
+	}
+
+	if !aggregated && (cfg.Enabled || (cfg.BaseURL != "" && cfg.APIKey != "" && cfg.Model != "")) {
 		prompts, err := s.reportRepo.FetchUserPrompts(ctx, userID, start, end, cfg.MaxPrompts)
 		if err == nil && len(prompts) > 0 {
 			stats.PromptCount = int64(len(prompts))
@@ -257,6 +257,83 @@ func (s *ReportService) buildSummary(
 	llmCtx, cancel := context.WithTimeout(ctx, reportLLMTimeout)
 	defer cancel()
 	return s.llm.ChatComplete(llmCtx, cfg, systemPrompt, userPrompt.String())
+}
+
+// appendSubReports 把周期内已生成的子报告（日报/周报）AI 摘要按时间正序追加进 LLM
+// 上下文。没有任何可用摘要时返回 false（调用方降级取 prompt 片段）。
+func (s *ReportService) appendSubReports(
+	ctx context.Context,
+	w *strings.Builder,
+	subType string,
+	start, end time.Time,
+	pageSize int,
+	userID int64,
+) bool {
+	items, _, err := s.reportRepo.List(ctx, pagination.PaginationParams{Page: 1, PageSize: pageSize}, ReportListFilters{
+		Type:      subType,
+		UserID:    userID,
+		StartDate: start,
+		EndDate:   end,
+	})
+	if err != nil {
+		return false
+	}
+	label := "日报"
+	if subType == domain.ReportTypeWeekly {
+		label = "周报"
+	}
+	found := false
+	// repo 按 period_start 倒序返回，倒序遍历得到时间正序
+	for i := len(items) - 1; i >= 0; i-- {
+		d := &items[i]
+		if d.AISummary == "" {
+			continue
+		}
+		found = true
+		w.WriteString(fmt.Sprintf("\n### %s %s摘要\n%s\n", d.PeriodStart.Format("2006-01-02"), label, d.AISummary))
+	}
+	return found
+}
+
+// reportSystemPrompt 按报告类型构造 system prompt，输出格式对齐 work-report
+// 标准版模板（按项目分组 + 分类标注 + 量化 + 合并同类）。
+func reportSystemPrompt(reportType string) string {
+	var b strings.Builder
+	b.WriteString("你是团队 AI 网关的工作报告助手，根据用户在网关上的请求统计与 prompt 片段，推断该用户本周期做了什么，用简体中文输出结构清晰的 Markdown 报告。\n\n")
+
+	b.WriteString("素材规则：\n")
+	b.WriteString("1. prompt 片段是「用户最新消息 + 历史上下文」的拍平文本：优先依据开头的用户真实输入判断工作意图；其中大段重复出现的系统提示词、工具注入的规则/环境说明属于噪音，仅用于识别所用工具与场景，不要当作工作内容复述。\n")
+	b.WriteString("2. 同类工作必须合并：多次调试/提交同一功能合并为一条（如「完成 XX 功能开发与调试」）。\n")
+	b.WriteString("3. 每条工作项一句话、不超过 30 字，动词开头：完成/修复/优化/调研/部署/联调/输出。\n")
+	b.WriteString("4. 能量化则量化（统计数字已提供：请求数/tokens/模型分布/活跃时段），严禁编造未提供的数字。\n")
+	b.WriteString("5. 严禁输出 prompt 原文中的密钥、token、密码等敏感信息；只做摘要，不逐条复述原文。\n\n")
+
+	switch reportType {
+	case domain.ReportTypeWeekly:
+		b.WriteString("输出格式（周报，聚合自本周各日报摘要，突出本周完成了什么而非逐日罗列）：\n")
+		b.WriteString("# 工作周报 <起止日期 MM.DD-MM.DD>\n")
+		b.WriteString("## <项目名>（按项目分组，项目名从内容推断，无法判断时用「AI 协作开发」；1-4 个项目，每项目 1-5 条）\n")
+		b.WriteString("N. <本周核心工作项>\n   - 分类: 需求开发/Bug修复/技术优化/技术支持/文档/其他\n\n")
+		b.WriteString("## 活跃模型（一段简述：主力模型与用途）\n")
+		b.WriteString("## 备注（异常或建议，无则省略整个小节）\n")
+	case domain.ReportTypeMonthly:
+		b.WriteString("输出格式（月报，聚合自当月周报/日报摘要，突出月度重点成果而非罗列每日细节）：\n")
+		b.WriteString("# 工作月报 <YYYY年M月>\n")
+		b.WriteString("## 本月核心成果\n")
+		b.WriteString("### <项目名>（1-4 个项目，每项目 1-5 条）\n")
+		b.WriteString("- <本月关键成果>\n  - 分类: 需求开发/Bug修复/技术优化/技术支持/文档/其他\n\n")
+		b.WriteString("## 质量提升（可选：依据统计数字概括，如请求规模、产出密度）\n")
+		b.WriteString("## 活跃模型（一段简述）\n")
+		b.WriteString("## 备注（异常或建议，无则省略整个小节）\n")
+	default:
+		b.WriteString("输出格式（日报）：\n")
+		b.WriteString("# <YYYY-MM-DD> 工作日报\n")
+		b.WriteString("## <项目名>（按项目分组，项目名从 prompt 内容推断，无法判断时用「AI 协作开发」；1-4 个项目，每项目 1-5 条）\n")
+		b.WriteString("N. <工作项>\n   - 分类: 需求开发/Bug修复/技术优化/技术支持/文档/其他\n   - 困难点: <仅当素材中明确出现报错/调试/阻塞时给出，否则省略该行>\n\n")
+		b.WriteString("## 活跃模型（一段简述）\n")
+		b.WriteString("## 备注（异常或建议，无则省略整个小节）\n")
+	}
+	return b.String()
 }
 
 // =========================

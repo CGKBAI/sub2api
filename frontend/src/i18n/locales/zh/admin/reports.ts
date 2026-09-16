@@ -1,8 +1,8 @@
 export default {
   reports: {
-    title: '日报周报',
+    title: '日报周报月报',
     description: '按用户聚合的请求统计与 AI 工作摘要；数据来自用量记录与提示词审计（需开启异步审计后才有 prompt 内容）。',
-    tabs: { daily: '日报', weekly: '周报' },
+    tabs: { daily: '日报', weekly: '周报', monthly: '月报' },
     filters: {
       date: '日期',
       user: '用户 ID',
@@ -42,6 +42,7 @@ export default {
       truncateChars: '单条 prompt 截断字符数',
       dailySchedule: '日报 cron（分 时 日 月 周）',
       weeklySchedule: '周报 cron（分 时 日 月 周）',
+      monthlySchedule: '月报 cron（每月 1 日生成上月）',
       save: '保存',
       cancel: '取消',
       saved: '已保存'

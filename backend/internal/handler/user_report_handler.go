@@ -39,8 +39,8 @@ func (h *UserReportHandler) List(c *gin.Context) {
 	filters := service.ReportListFilters{
 		Type: strings.TrimSpace(c.Query("type")),
 	}
-	if filters.Type != "" && filters.Type != service.ReportTypeDaily && filters.Type != service.ReportTypeWeekly {
-		response.BadRequest(c, "type must be daily or weekly")
+	if filters.Type != "" && filters.Type != service.ReportTypeDaily && filters.Type != service.ReportTypeWeekly && filters.Type != service.ReportTypeMonthly {
+		response.BadRequest(c, "type must be daily, weekly or monthly")
 		return
 	}
 	if raw := strings.TrimSpace(c.Query("date")); raw != "" {

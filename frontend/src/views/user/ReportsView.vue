@@ -3,7 +3,7 @@ import { onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import userReportsAPI, { type Report } from '@/api/reports'
+import userReportsAPI, { type Report, type ReportType } from '@/api/reports'
 import { useAppStore } from '@/stores/app'
 import { EmptyState, LoadingSpinner } from '@/components/common'
 
@@ -11,8 +11,6 @@ marked.setOptions({ breaks: true, gfm: true })
 
 const { t } = useI18n()
 const appStore = useAppStore()
-
-type ReportType = 'daily' | 'weekly'
 
 const activeTab = ref<ReportType>('daily')
 const date = ref(todayStr())
@@ -89,7 +87,7 @@ const modelEntries = (report: Report) =>
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div class="flex rounded-lg border border-gray-200 dark:border-gray-700 p-0.5">
         <button
-          v-for="tp in ['daily', 'weekly'] as const"
+          v-for="tp in ['daily', 'weekly', 'monthly'] as const"
           :key="tp"
           class="rounded-md px-4 py-1.5 text-sm font-medium transition-colors"
           :class="

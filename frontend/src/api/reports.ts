@@ -4,12 +4,12 @@
 
 import { apiClient } from './client'
 import type { BasePaginationResponse } from '@/types'
-import type { Report } from './admin/reports'
+import type { Report, ReportType } from './admin/reports'
 
-export type { Report, ReportStats } from './admin/reports'
+export type { Report, ReportStats, ReportType } from './admin/reports'
 
 export interface UserReportListFilters {
-  type?: 'daily' | 'weekly'
+  type?: ReportType
   date?: string
 }
 

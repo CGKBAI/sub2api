@@ -23,8 +23,9 @@ type ReportLLMConfig struct {
 	MaxPrompts          int `json:"max_prompts"`           // 每次总结最多取多少条 prompt（默认 30）
 	PromptTruncateChars int `json:"prompt_truncate_chars"` // 单条 prompt 截断长度（默认 500）
 	// 定时计划（cron，5 段式：分 时 日 月 周）
-	DailySchedule  string `json:"daily_schedule"`  // 默认 "0 20 * * *"
-	WeeklySchedule string `json:"weekly_schedule"` // 默认 "10 20 * * 5"
+	DailySchedule   string `json:"daily_schedule"`   // 默认 "0 20 * * *"
+	WeeklySchedule  string `json:"weekly_schedule"`  // 默认 "10 20 * * 5"
+	MonthlySchedule string `json:"monthly_schedule"` // 默认 "20 20 1 * *"（每月 1 日生成上月）
 }
 
 func defaultReportLLMConfig() *ReportLLMConfig {
@@ -37,6 +38,7 @@ func defaultReportLLMConfig() *ReportLLMConfig {
 		PromptTruncateChars: 500,
 		DailySchedule:       "0 20 * * *",
 		WeeklySchedule:      "10 20 * * 5",
+		MonthlySchedule:     "20 20 1 * *",
 	}
 }
 
@@ -66,6 +68,10 @@ func normalizeReportLLMConfig(cfg *ReportLLMConfig) {
 	cfg.WeeklySchedule = strings.TrimSpace(cfg.WeeklySchedule)
 	if cfg.WeeklySchedule == "" {
 		cfg.WeeklySchedule = "10 20 * * 5"
+	}
+	cfg.MonthlySchedule = strings.TrimSpace(cfg.MonthlySchedule)
+	if cfg.MonthlySchedule == "" {
+		cfg.MonthlySchedule = "20 20 1 * *"
 	}
 }
 

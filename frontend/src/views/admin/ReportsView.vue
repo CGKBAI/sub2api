@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import reportsAPI, { type Report, type ReportLLMConfig } from '@/api/admin/reports'
+import reportsAPI, { type Report, type ReportLLMConfig, type ReportType } from '@/api/admin/reports'
 import { useAppStore } from '@/stores/app'
 import { BaseDialog, EmptyState, LoadingSpinner } from '@/components/common'
 
@@ -11,8 +11,6 @@ marked.setOptions({ breaks: true, gfm: true })
 
 const { t } = useI18n()
 const appStore = useAppStore()
-
-type ReportType = 'daily' | 'weekly'
 
 const activeTab = ref<ReportType>('daily')
 const date = ref(todayStr())
@@ -118,7 +116,8 @@ const configForm = ref<ReportLLMConfig & { api_key: string }>({
   max_prompts: 30,
   prompt_truncate_chars: 500,
   daily_schedule: '0 20 * * *',
-  weekly_schedule: '10 20 * * 5'
+  weekly_schedule: '10 20 * * 5',
+  monthly_schedule: '20 20 1 * *'
 })
 
 async function openSettings() {
@@ -198,7 +197,7 @@ const statusBadge = computed(() => (status: string) => {
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div class="flex rounded-lg border border-gray-200 dark:border-gray-700 p-0.5">
         <button
-          v-for="tp in ['daily', 'weekly'] as const"
+          v-for="tp in ['daily', 'weekly', 'monthly'] as const"
           :key="tp"
           class="rounded-md px-4 py-1.5 text-sm font-medium transition-colors"
           :class="
@@ -363,6 +362,10 @@ const statusBadge = computed(() => (status: string) => {
           <div>
             <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.config.weeklySchedule') }}</label>
             <input v-model="configForm.weekly_schedule" type="text" :class="inputClass" />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.config.monthlySchedule') }}</label>
+            <input v-model="configForm.monthly_schedule" type="text" :class="inputClass" />
           </div>
         </div>
         <div class="flex justify-end gap-2 pt-2">

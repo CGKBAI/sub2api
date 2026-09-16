@@ -35,10 +35,10 @@ end
 return 0
 `)
 
-// ReportSchedulerService 后台定时生成日报/周报。
+// ReportSchedulerService 后台定时生成日报/周报/月报。
 //
-// 每分钟 tick 一次，按配置里的 cron 表达式（默认每日 20:00 日报、周五 20:10 周报）
-// 触发；Redis leader lock 保证多实例（灰度并行）只有一个实例执行；
+// 每分钟 tick 一次，按配置里的 cron 表达式（默认每日 20:00 日报、周五 20:10 周报、
+// 每月 1 日 20:20 上月月报）触发；Redis leader lock 保证多实例（灰度并行）只有一个实例执行；
 // REPORT_SCHEDULER_ENABLED=false 可整体禁用（canary 用）。
 type ReportSchedulerService struct {
 	reportService *ReportService
@@ -154,6 +154,7 @@ func (s *ReportSchedulerService) runOnce() {
 	defs := []scheduleDef{
 		{kind: "daily", spec: cfg.DailySchedule, reportType: domain.ReportTypeDaily},
 		{kind: "weekly", spec: cfg.WeeklySchedule, reportType: domain.ReportTypeWeekly},
+		{kind: "monthly", spec: cfg.MonthlySchedule, reportType: domain.ReportTypeMonthly},
 	}
 
 	for _, d := range defs {

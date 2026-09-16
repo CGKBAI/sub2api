@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	ReportTypeDaily  = domain.ReportTypeDaily
-	ReportTypeWeekly = domain.ReportTypeWeekly
+	ReportTypeDaily   = domain.ReportTypeDaily
+	ReportTypeWeekly  = domain.ReportTypeWeekly
+	ReportTypeMonthly = domain.ReportTypeMonthly
 
 	ReportStatusPending = domain.ReportStatusPending
 	ReportStatusDone    = domain.ReportStatusDone

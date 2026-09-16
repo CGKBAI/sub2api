@@ -1,16 +1,17 @@
-# sub2api 日报/周报功能 — 项目状态（供新 session 接续）
+# sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-15（M1-M4 已完成，功能已上线，进入开发迭代期）。
+> 本文档是完整项目上下文。最后更新：2026-09-16（新增月报类型 + LLM 总结 prompt 融入 work-report 标准模板，已上线生产）。
 
 ## 1. 功能与当前状态总览
 
-在自部署 sub2api（Wei-Shaw/sub2api，AI API 网关）上新增**日报/周报**能力：
+在自部署 sub2api（Wei-Shaw/sub2api，AI API 网关）上新增**日报/周报/月报**能力：
 
 1. ✅ **Prompt 存储**（核心，已完成）：异步审计落库 `prompt_audit_events`，**扫描失败也必存**（降级落库）
 2. ✅ **fork 改造**：Web 界面（admin 看所有人 / user 看自己）、定时生成、手动生成、LLM 设置页
 3. ✅ **已上线生产**（33333，`sub2api:stable`）
-4. ⏳ **AI 总结质量优化**：用户明确"到时写一个 skill 来处理"，本期暂缓（当前用 MiniMax 直接总结，报告会含工具注入的 prompt 噪音）
-5. ⏸ **飞书推送**：暂缓
+4. ✅ **月报类型**（2026-09-16）：迁移 233 放宽 CHECK；月报固定覆盖 ref 的**上一个自然月**（每月 1 日 20:20 生成上月，手动生成语义一致）；聚合优先级：当月周报 → 当月日报 → prompt 片段
+5. ✅ **LLM 总结 prompt 重写**（2026-09-16）：`reportSystemPrompt()` 按 work-report 标准模板（`/home/xxy/fs/work-report`，已精简为标准版单一模板）输出——按项目分组 + 分类标注 + 量化 + 合并同类；含"区分用户真实输入 vs 工具注入噪音"指令；日/周/月三种格式
+6. ⏸ **飞书推送**：暂缓
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -82,18 +83,18 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 |---|---|
 | `risk_control_enabled` | true |
 | `prompt_audit_config` | 异步审计（async，不阻断），审计节点：**MiniMax** `https://api.minimaxi.com` + `MiniMax-M2`（账号 id=5 的 key，AES-256-GCM 加密存 token_ciphertext，密钥=.env 的 TOTP_ENCRYPTION_KEY），input_limit=2000，timeout=15000ms |
-| `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=30，单条截断 500 字符，日报 cron `0 20 * * *`，周报 `10 20 * * 5` |
+| `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=30，单条截断 500 字符，日报 cron `0 20 * * *`，周报 `10 20 * * 5`，月报 `20 20 1 * *`（每月 1 日生成上月；存量 JSON 缺 monthly_schedule 时读取自动补默认） |
 
 配置修改：直接 UPDATE settings 表（ConfigManager 每 5 秒 TTL reload，无需重启）；endpoint token 必须先用 TOTP_ENCRYPTION_KEY 做 AES-256-GCM 加密（base64(nonce+ct+tag)，node crypto 可做）。
 
 ## 7. fork 相对官方 v0.1.184 的改动清单（rebase 时注意）
 
 **新增文件**（reports 功能全套）：
-- `backend/internal/domain/report.go`、`ent/schema/report.go`、`migrations/232_reports.sql`（reports 表，唯一索引 user_id+type+period_start）
+- `backend/internal/domain/report.go`、`ent/schema/report.go`、`migrations/232_reports.sql`（reports 表，唯一索引 user_id+type+period_start）、`migrations/233_reports_monthly.sql`（CHECK 放宽加 'monthly'，纯增量、旧版本兼容）
 - `backend/internal/service/report.go|report_service.go|report_llm.go|report_scheduler.go`
 - `backend/internal/repository/report_repo.go`（usage_logs 聚合 + prompt 拉取均原生 SQL）
 - `backend/internal/handler/dto/report.go`、`handler/admin/report_handler.go`、`handler/user_report_handler.go`
-- 前端：`api/admin/reports.ts|api/reports.ts`、`views/admin|user/ReportsView.vue`、i18n `zh|en/admin/reports.ts`
+- 前端：`api/admin/reports.ts|api/reports.ts`（共享 `ReportType` 类型）、`views/admin|user/ReportsView.vue`（三 tab：日/周/月 + 月报 cron 配置）、i18n `zh|en/admin/reports.ts`
 
 **修改官方文件（挂载点）**：`config.go`（ReportConfig）、`handler.go|handler/wire.go`、`service/wire.go`、`repository/wire.go`、`routes/admin.go|user.go`、`cmd/server/wire.go`（cleanup）、`domain_constants.go`（SettingKeyReportConfig）、router/index.ts、AppSidebar.vue（ReportIcon）、i18n common.ts nav + admin/index.ts ×2、go.mod/go.sum（wire cmd indirect）
 
@@ -104,10 +105,12 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 
 ## 8. 待办
 
-- [ ] 用户验证：33333 网页登录 → "日报周报"页 → 手动生成（数据已具备，纯统计+MiniMax 总结）
+- [ ] 用户验证：33333 网页登录 → "日报周报月报"页 → 手动生成日/周/月三种报告（月报默认生成**上月**，即 2026-08）
 - [ ] 验证今晚 20:00 定时日报自动生成（reports 表应出现当日记录）
+- [ ] 验证本周五 20:10 首次周报 + 10 月 1 日 20:20 首次月报（月报应聚合 9 月的周报摘要）
 - [x] push 到 fork 完成（CGKBAI/sub2api，2026-09-15）
-- [ ] （后续迭代）AI 总结 skill：区分"用户真实输入"（优先级段）vs 工具注入 prompt（大段噪音），提升日报质量
+- [x] 月报类型 + 模板化 LLM prompt 上线（2026-09-16）
+- [ ] （后续迭代）AI 总结 skill 深化：当前 prompt 已含噪音过滤指令，可再评估报告质量决定是否做输入侧过滤（区分"用户真实输入"优先级段 vs 工具注入大段噪音）
 - [ ] （后续迭代）飞书推送
 
 ## 9. 环境速记

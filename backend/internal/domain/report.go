@@ -6,10 +6,11 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
-// 日报/周报类型与状态常量。
+// 日报/周报/月报类型与状态常量。
 const (
-	ReportTypeDaily  = "daily"
-	ReportTypeWeekly = "weekly"
+	ReportTypeDaily   = "daily"
+	ReportTypeWeekly  = "weekly"
+	ReportTypeMonthly = "monthly"
 
 	ReportStatusPending = "pending"
 	ReportStatusDone    = "done"
@@ -18,7 +19,7 @@ const (
 
 var (
 	ErrReportNotFound         = infraerrors.NotFound("REPORT_NOT_FOUND", "report not found")
-	ErrReportInvalidType      = infraerrors.BadRequest("REPORT_TYPE_INVALID", "report type must be daily or weekly")
+	ErrReportInvalidType      = infraerrors.BadRequest("REPORT_TYPE_INVALID", "report type must be daily, weekly or monthly")
 	ErrReportInvalidPeriod    = infraerrors.BadRequest("REPORT_PERIOD_INVALID", "report period is invalid")
 	ErrReportLLMNotConfigured = infraerrors.BadRequest("REPORT_LLM_NOT_CONFIGURED", "report LLM is not configured")
 	ErrReportLLMCallFailed    = infraerrors.BadRequest("REPORT_LLM_CALL_FAILED", "report LLM call failed")
@@ -62,4 +63,9 @@ type Report struct {
 // IsWeekly 报告是否为周报。
 func (r *Report) IsWeekly() bool {
 	return r != nil && r.Type == ReportTypeWeekly
+}
+
+// IsMonthly 报告是否为月报。
+func (r *Report) IsMonthly() bool {
+	return r != nil && r.Type == ReportTypeMonthly
 }

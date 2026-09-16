@@ -73,14 +73,14 @@ func (h *ReportHandler) GetByID(c *gin.Context) {
 }
 
 type generateReportRequest struct {
-	Type   string `json:"type" binding:"required,oneof=daily weekly"`
+	Type   string `json:"type" binding:"required,oneof=daily weekly monthly"`
 	UserID int64  `json:"user_id" binding:"required,gt=0"`
 	// Date 基准日期（YYYY-MM-DD，服务器时区）；为空取当天
 	Date string `json:"date" binding:"omitempty,datetime=2006-01-02"`
 }
 
 type generateAllReportRequest struct {
-	Type string `json:"type" binding:"required,oneof=daily weekly"`
+	Type string `json:"type" binding:"required,oneof=daily weekly monthly"`
 	// Date 基准日期（YYYY-MM-DD，服务器时区）；为空取当天
 	Date string `json:"date" binding:"omitempty,datetime=2006-01-02"`
 }
@@ -152,6 +152,7 @@ type updateReportConfigRequest struct {
 	PromptTruncateChars *int    `json:"prompt_truncate_chars"`
 	DailySchedule       *string `json:"daily_schedule"`
 	WeeklySchedule      *string `json:"weekly_schedule"`
+	MonthlySchedule     *string `json:"monthly_schedule"`
 }
 
 // UpdateConfig handles updating report LLM config
@@ -193,6 +194,9 @@ func (h *ReportHandler) UpdateConfig(c *gin.Context) {
 	if req.WeeklySchedule != nil {
 		cfg.WeeklySchedule = *req.WeeklySchedule
 	}
+	if req.MonthlySchedule != nil {
+		cfg.MonthlySchedule = *req.MonthlySchedule
+	}
 
 	updated, err := h.reportService.UpdateReportConfig(c.Request.Context(), cfg)
 	if err != nil {
@@ -218,8 +222,8 @@ func parseReportFilters(c *gin.Context) (service.ReportListFilters, bool) {
 	filters := service.ReportListFilters{
 		Type: strings.TrimSpace(c.Query("type")),
 	}
-	if filters.Type != "" && filters.Type != service.ReportTypeDaily && filters.Type != service.ReportTypeWeekly {
-		response.BadRequest(c, "type must be daily or weekly")
+	if filters.Type != "" && filters.Type != service.ReportTypeDaily && filters.Type != service.ReportTypeWeekly && filters.Type != service.ReportTypeMonthly {
+		response.BadRequest(c, "type must be daily, weekly or monthly")
 		return filters, false
 	}
 
