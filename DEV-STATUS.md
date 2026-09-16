@@ -22,7 +22,7 @@
 | `sub2api-redis` | 内部 | redis:8-alpine | 主 compose | 队列/缓存（`./redis_data`） |
 
 - 源码：`/home/xxy/fs/sub2api`，分支 `feature/daily-weekly-reports`，基点 **v0.1.184**（与线上迁移集合 273 文件零差异核实）
-- 尚未 push 到任何远端 fork（**待用户做**，防丢代码）
+- 已 push 到 fork：https://github.com/CGKBAI/sub2api（branch feature/daily-weekly-reports）
 - 备份：`/home/xxy/fs/backup-20260915-1124.sql`（canary 迁移前 pg_dump，70MB，历史快照；注意：2026-09-15 晚发现该文件已不在，如需快照可重新 `docker exec sub2api-postgres pg_dump -U sub2api sub2api > ...`）
 
 ## 3. Git 工作流（跟官方更新）
@@ -43,7 +43,7 @@ docker buildx build --load -t sub2api:dev .   # 先在 33336 验证再发布
 
 **推送到自己的 fork 备份**（待用户创建 fork 后执行一次）：
 ```bash
-git remote add fork https://github.com/<你的用户名>/sub2api.git
+git remote add fork https://github.com/CGKBAI/sub2api.git   # 已配置
 git push -u fork feature/daily-weekly-reports
 # 以后每次 commit 后：git push fork feature/daily-weekly-reports
 ```
@@ -106,7 +106,7 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 
 - [ ] 用户验证：33333 网页登录 → "日报周报"页 → 手动生成（数据已具备，纯统计+MiniMax 总结）
 - [ ] 验证今晚 20:00 定时日报自动生成（reports 表应出现当日记录）
-- [ ] **push 到自己 GitHub fork**（防丢代码）
+- [x] push 到 fork 完成（CGKBAI/sub2api，2026-09-15）
 - [ ] （后续迭代）AI 总结 skill：区分"用户真实输入"（优先级段）vs 工具注入 prompt（大段噪音），提升日报质量
 - [ ] （后续迭代）飞书推送
 
