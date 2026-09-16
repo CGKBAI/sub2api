@@ -452,6 +452,9 @@ const (
 	// SettingKeyOpsRuntimeLogConfig stores JSON config for runtime log settings.
 	SettingKeyOpsRuntimeLogConfig = "ops_runtime_log_config"
 
+	// SettingKeyReportConfig stores JSON config for user daily/weekly reports (LLM + schedules).
+	SettingKeyReportConfig = "report_config"
+
 	// =========================
 	// Channel Monitor (渠道监控)
 	// =========================

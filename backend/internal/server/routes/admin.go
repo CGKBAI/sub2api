@@ -130,6 +130,21 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+
+		// 用户日报/周报
+		registerReportRoutes(admin, h)
+	}
+}
+
+func registerReportRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	reports := admin.Group("/reports")
+	{
+		reports.GET("", h.Admin.Reports.List)
+		reports.GET("/config", h.Admin.Reports.GetConfig)
+		reports.PUT("/config", h.Admin.Reports.UpdateConfig)
+		reports.POST("/generate", h.Admin.Reports.Generate)
+		reports.POST("/generate-all", h.Admin.Reports.GenerateAll)
+		reports.GET("/:id", h.Admin.Reports.GetByID)
 	}
 }
 

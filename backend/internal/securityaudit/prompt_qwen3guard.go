@@ -187,6 +187,20 @@ func isElevatedControversial(category string) bool {
 	return category == "jailbreak" || category == "pii" || category == "suicide_and_self_harm"
 }
 
+// qwen3GuardSystemPrompt lets any OpenAI-compatible chat model emit the
+// "Safety: ...\nCategories: ..." text format that ParseQwen3Guard expects.
+// Dedicated Qwen3Guard models already reply in this format, so the system
+// prompt is harmless for them and makes generic models (deepseek-chat, glm,
+// gpt-4o-mini, ...) usable as audit endpoints.
+const qwen3GuardSystemPrompt = "You are a prompt safety classifier. Skip any reasoning or explanation and reply immediately in EXACTLY this two-line format, nothing else:\n" +
+	"Safety: Safe\n" +
+	"Categories: none\n" +
+	"Safety must be one of Safe, Controversial, Unsafe. Categories must be a comma-separated list from: " +
+	"violent, non_violent_illegal_acts, sexual_content_or_sexual_acts, pii, suicide_and_self_harm, " +
+	"unethical_acts, politically_sensitive_topics, copyright_violation, jailbreak — or none. " +
+	"Keep any internal deliberation extremely brief and ALWAYS finish with the two required lines. " +
+	"Use Safety: Unsafe for clearly harmful requests, Controversial for borderline topics, Safe otherwise."
+
 type OpenAICompatibleScanner struct {
 	clients sync.Map
 }
@@ -203,10 +217,15 @@ func (s *OpenAICompatibleScanner) Scan(ctx context.Context, endpoint ActiveEndpo
 		return nil, &GuardError{Code: ErrorCodeUnavailable, Cause: err}
 	}
 	payload := map[string]any{
-		"model":       endpoint.Model,
-		"messages":    []map[string]string{{"role": "user", "content": chunk}},
+		"model": endpoint.Model,
+		"messages": []map[string]string{
+			{"role": "system", "content": qwen3GuardSystemPrompt},
+			{"role": "user", "content": chunk},
+		},
 		"temperature": 0,
-		"max_tokens":  64,
+		// 1024：思考型模型（如 MiniMax-M2）会先输出 <think> 再给结论，
+		// 预算不足时结论行被截断导致解析失败；小模型不受影响。
+		"max_tokens":  1024,
 		"seed":        42,
 	}
 	body, err := json.Marshal(payload)

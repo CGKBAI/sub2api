@@ -119,6 +119,12 @@ func RegisterUserRoutes(
 			announcements.POST("/:id/read", h.Announcement.MarkRead)
 		}
 
+		// 我的日报/周报（只读，强制过滤当前用户）
+		userReports := authenticated.Group("/user/reports")
+		{
+			userReports.GET("", h.UserReport.List)
+		}
+
 		// 卡密兑换
 		redeem := authenticated.Group("/redeem")
 		{

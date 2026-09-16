@@ -649,6 +649,25 @@ func ProvideOpsScheduledReportService(
 	return svc
 }
 
+// ProvideReportService creates the user daily/weekly report service.
+func ProvideReportService(
+	reportRepo ReportRepository,
+	settingRepo SettingRepository,
+) *ReportService {
+	return NewReportService(reportRepo, settingRepo)
+}
+
+// ProvideReportSchedulerService creates and starts the report scheduler.
+func ProvideReportSchedulerService(
+	reportService *ReportService,
+	redisClient *redis.Client,
+	cfg *config.Config,
+) *ReportSchedulerService {
+	svc := NewReportSchedulerService(reportService, redisClient, cfg)
+	svc.Start()
+	return svc
+}
+
 // ProvideAPIKeyAuthCacheInvalidator 提供 API Key 认证缓存失效能力
 func ProvideAPIKeyAuthCacheInvalidator(apiKeyService *APIKeyService) APIKeyAuthCacheInvalidator {
 	// Start Pub/Sub subscriber for L1 cache invalidation across instances
@@ -889,6 +908,8 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsAlertEvaluatorService,
 	ProvideOpsCleanupService,
 	ProvideOpsScheduledReportService,
+	ProvideReportService,
+	ProvideReportSchedulerService,
 	NewEmailService,
 	NewNotificationEmailService,
 	ProvideEmailQueueService,

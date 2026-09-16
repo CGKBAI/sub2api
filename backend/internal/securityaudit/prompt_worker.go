@@ -165,7 +165,28 @@ func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig,
 				"error_code": guardErrorCode(scanErr), "status": "failed",
 			}))
 			r.observeAsyncFailure(scanErr, r.clock.Now().Sub(started))
-			return r.finishFailure(ctx, job, scanErr)
+			// 消息必存：扫描失败时以降级结果落库（decision=pass），保证
+			// full_prompt 不因审计端点抖动而丢失。job 记为 done 避免无效重试。
+			fallback := &NormalizedResult{
+				Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow,
+				ScannerBackend: "qwen3guard-openai", Categories: []string{}, MatchedScanners: []string{},
+				ScannerScores: map[string]float64{}, ScannerEvidence: map[string]string{},
+				ChunkTotal:     len(chunks),
+				LatencyMS:      int(r.clock.Now().Sub(started).Milliseconds()),
+				ScannerVersion: "scan_failed:" + guardErrorCode(scanErr),
+			}
+			if _, cErr := r.repo.Complete(ctx, job, fallback, true); cErr != nil {
+				return r.finishFailure(ctx, job, scanErr)
+			}
+			if deleteErr := r.payload.Delete(ctx, job.ID); deleteErr != nil {
+				LogWarn(EventProcessFailed, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "status": "payload_delete_deferred", "error_code": "payload_delete_failed"}))
+			}
+			LogWarn(EventProcessFailed, mergeLogFields(baseFields, map[string]any{
+				"worker_id": workerID, "status": "stored_degraded",
+				"error_code": guardErrorCode(scanErr), "chunk_index": index + 1, "chunk_total": len(chunks),
+				"persisted": true,
+			}))
+			return nil
 		}
 		results = append(results, result)
 		LogInfo(EventChunkCompleted, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks), "guard_endpoint_id": result.GuardEndpointID, "action": result.Action, "latency_ms": r.clock.Now().Sub(chunkStarted).Milliseconds(), "status": "completed"}))

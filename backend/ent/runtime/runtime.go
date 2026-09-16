@@ -32,6 +32,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
+	"github.com/Wei-Shaw/sub2api/ent/report"
 	"github.com/Wei-Shaw/sub2api/ent/schema"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
@@ -1743,6 +1744,36 @@ func init() {
 	redeemcodeDescValidityDays := redeemcodeFields[10].Descriptor()
 	// redeemcode.DefaultValidityDays holds the default value on creation for the validity_days field.
 	redeemcode.DefaultValidityDays = redeemcodeDescValidityDays.Default.(int)
+	reportFields := schema.Report{}.Fields()
+	_ = reportFields
+	// reportDescType is the schema descriptor for type field.
+	reportDescType := reportFields[1].Descriptor()
+	// report.TypeValidator is a validator for the "type" field. It is called by the builders before save.
+	report.TypeValidator = reportDescType.Validators[0].(func(string) error)
+	// reportDescAiSummary is the schema descriptor for ai_summary field.
+	reportDescAiSummary := reportFields[5].Descriptor()
+	// report.DefaultAiSummary holds the default value on creation for the ai_summary field.
+	report.DefaultAiSummary = reportDescAiSummary.Default.(string)
+	// reportDescStatus is the schema descriptor for status field.
+	reportDescStatus := reportFields[6].Descriptor()
+	// report.DefaultStatus holds the default value on creation for the status field.
+	report.DefaultStatus = reportDescStatus.Default.(string)
+	// report.StatusValidator is a validator for the "status" field. It is called by the builders before save.
+	report.StatusValidator = reportDescStatus.Validators[0].(func(string) error)
+	// reportDescError is the schema descriptor for error field.
+	reportDescError := reportFields[7].Descriptor()
+	// report.DefaultError holds the default value on creation for the error field.
+	report.DefaultError = reportDescError.Default.(string)
+	// reportDescCreatedAt is the schema descriptor for created_at field.
+	reportDescCreatedAt := reportFields[8].Descriptor()
+	// report.DefaultCreatedAt holds the default value on creation for the created_at field.
+	report.DefaultCreatedAt = reportDescCreatedAt.Default.(func() time.Time)
+	// reportDescUpdatedAt is the schema descriptor for updated_at field.
+	reportDescUpdatedAt := reportFields[9].Descriptor()
+	// report.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	report.DefaultUpdatedAt = reportDescUpdatedAt.Default.(func() time.Time)
+	// report.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	report.UpdateDefaultUpdatedAt = reportDescUpdatedAt.UpdateDefault.(func() time.Time)
 	securitysecretMixin := schema.SecuritySecret{}.Mixin()
 	securitysecretMixinFields0 := securitysecretMixin[0].Fields()
 	_ = securitysecretMixinFields0

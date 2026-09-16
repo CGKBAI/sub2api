@@ -104,6 +104,13 @@ type Config struct {
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
+	Report                  ReportConfig                  `mapstructure:"report"`
+}
+
+// ReportConfig 用户日报/周报功能配置。
+type ReportConfig struct {
+	// SchedulerEnabled 控制定时生成开关（REPORT_SCHEDULER_ENABLED=false 可禁用，灰度 canary 用）。
+	SchedulerEnabled bool `mapstructure:"scheduler_enabled"`
 }
 
 // PluginConfig 控制管理员手动上传的本地进程插件。
@@ -2294,6 +2301,9 @@ func setDefaults() {
 	viper.SetDefault("plugins.max_upload_bytes", int64(128*1024*1024))
 	viper.SetDefault("plugins.max_uncompressed_bytes", int64(256*1024*1024))
 	viper.SetDefault("plugins.start_timeout_seconds", 15)
+
+	// Report (user daily/weekly reports)
+	viper.SetDefault("report.scheduler_enabled", true)
 
 	// Timezone (default to Asia/Shanghai for Chinese users)
 	viper.SetDefault("timezone", "Asia/Shanghai")
