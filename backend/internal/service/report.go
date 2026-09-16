@@ -53,6 +53,8 @@ type ReportRepository interface {
 	FetchUserPrompts(ctx context.Context, userID int64, start, end time.Time, limit int) ([]UserPromptSnippet, error)
 	// ListActiveUserIDs 列出时间窗内有用量的用户 ID。
 	ListActiveUserIDs(ctx context.Context, start, end time.Time) ([]int64, error)
+	// GetUsername 查询用户显示名（users.username，用于报告标题）。
+	GetUsername(ctx context.Context, userID int64) (string, error)
 }
 
 // UserPromptSnippet 是用于 LLM 总结的单条 prompt 片段。

@@ -277,6 +277,21 @@ func (r *reportRepository) ListActiveUserIDs(ctx context.Context, start, end tim
 	return out, rows.Err()
 }
 
+// GetUsername 查询用户显示名（users.username，报告标题用）。
+// 用户不存在或已删除时返回空串（标题退化为不带姓名）。
+func (r *reportRepository) GetUsername(ctx context.Context, userID int64) (string, error) {
+	u, err := r.client.User.Query().
+		Where(user.ID(userID)).
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return u.Username, nil
+}
+
 // attachUsernames 批量补齐 username（users 表 LEFT JOIN 等价实现）。
 func (r *reportRepository) attachUsernames(ctx context.Context, items []*service.Report) {
 	if len(items) == 0 {
