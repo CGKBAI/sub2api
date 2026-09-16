@@ -232,7 +232,7 @@ func (s *ReportService) buildSummary(
 		prompts, err := s.reportRepo.FetchUserPrompts(ctx, userID, start, end, cfg.MaxPrompts)
 		if err == nil && len(prompts) > 0 {
 			stats.PromptCount = int64(len(prompts))
-			userPrompt.WriteString(fmt.Sprintf("\n### Prompt 片段（最新 %d 条，每条截断 %d 字符）\n", len(prompts), cfg.PromptTruncateChars))
+			userPrompt.WriteString(fmt.Sprintf("\n### Prompt 片段（全天均匀抽样 %d 条，每条截断 %d 字符，按时间正序）\n", len(prompts), cfg.PromptTruncateChars))
 			for _, p := range prompts {
 				content := truncateRunes(p.Content, cfg.PromptTruncateChars)
 				if strings.TrimSpace(content) == "" {

@@ -102,8 +102,11 @@ func (r *reportRepository) List(
 	if filters.UserID > 0 {
 		q = q.Where(report.UserIDEQ(filters.UserID))
 	}
+	// 日期筛选用「周期覆盖」语义：period 与 [StartDate, EndDate) 有交集即命中。
+	// 周报（period_start=周一）/月报（period_start=上月 1 日）在周中/月末查看时，
+	// 按 period_start 落入所选日过滤会永远查不到；覆盖语义对日/周/月三种类型统一正确。
 	if !filters.StartDate.IsZero() {
-		q = q.Where(report.PeriodStartGTE(filters.StartDate))
+		q = q.Where(report.PeriodEndGT(filters.StartDate))
 	}
 	if !filters.EndDate.IsZero() {
 		q = q.Where(report.PeriodStartLT(filters.EndDate))
@@ -208,7 +211,9 @@ func (r *reportRepository) AggregateUserUsage(ctx context.Context, userID int64,
 	return stats, nil
 }
 
-// FetchUserPrompts 拉取 prompt_audit_events 中的 prompt 片段（最新优先，数量受限）。
+// FetchUserPrompts 拉取 prompt_audit_events 中的 prompt 片段（全天均匀抽样，按时间正序）。
+// 单纯取最新 N 条会只覆盖傍晚的请求、丢掉早晨的工作；这里按 ROW_NUMBER 取模分桶，
+// 覆盖整个统计周期。总数不超过 limit 时全量返回。
 func (r *reportRepository) FetchUserPrompts(ctx context.Context, userID int64, start, end time.Time, limit int) ([]service.UserPromptSnippet, error) {
 	if limit <= 0 {
 		limit = 30
@@ -216,11 +221,19 @@ func (r *reportRepository) FetchUserPrompts(ctx context.Context, userID int64, s
 	client := clientFromContext(ctx, r.client)
 
 	rows, err := client.QueryContext(ctx, `
-		SELECT COALESCE(model, ''), created_at,
-		       COALESCE(NULLIF(full_prompt, ''), NULLIF(redacted_preview, ''), '') AS content
-		FROM prompt_audit_events
-		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
-		ORDER BY created_at DESC
+		WITH windowed AS (
+		    SELECT COALESCE(model, '') AS model,
+		           created_at,
+		           COALESCE(NULLIF(full_prompt, ''), NULLIF(redacted_preview, ''), '') AS content,
+		           ROW_NUMBER() OVER (ORDER BY created_at) AS rn,
+		           COUNT(*) OVER () AS total
+		    FROM prompt_audit_events
+		    WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
+		)
+		SELECT model, created_at, content
+		FROM windowed
+		WHERE total <= $4 OR (rn - 1) % ((total + $4 - 1) / $4) = 0
+		ORDER BY created_at
 		LIMIT $4
 	`, userID, start, end, limit)
 	if err != nil {
