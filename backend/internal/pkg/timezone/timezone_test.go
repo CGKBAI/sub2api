@@ -161,3 +161,30 @@ func TestStartOfWeek_Boundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestStartOfWeekSaturday_Boundaries(t *testing.T) {
+	if err := Init("Asia/Shanghai"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { _ = Init("UTC") })
+
+	loc := Location()
+	wantSat := time.Date(2026, 9, 12, 0, 0, 0, 0, loc) // 2026-09-12 是周六
+
+	cases := []struct {
+		name string
+		in   time.Time
+	}{
+		{"friday-evening", time.Date(2026, 9, 18, 20, 10, 0, 0, loc)},
+		{"saturday-self", time.Date(2026, 9, 12, 9, 15, 0, 0, loc)},
+		{"sunday", time.Date(2026, 9, 13, 10, 0, 0, 0, loc)},
+		{"midweek", time.Date(2026, 9, 16, 15, 0, 0, 0, loc)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := StartOfWeekSaturday(c.in); !got.Equal(wantSat) {
+				t.Errorf("StartOfWeekSaturday(%v) = %v, want %v", c.in, got, wantSat)
+			}
+		})
+	}
+}

@@ -52,8 +52,9 @@ type ReportRepository interface {
 	// FetchUserTurns 拉取用户在时间窗内的逐次请求快照（prompt_audit_events，
 	// 每条 Content 为完整拍平 prompt 的头部截断，由上层提取用户真实输入），按时间正序。
 	FetchUserTurns(ctx context.Context, userID int64, start, end time.Time, limit int) ([]UserPromptSnippet, error)
-	// FetchPromptSnapshots 拉取时间窗内均匀分布的 count 条请求完整 prompt
-	// （含全部拍平上下文，供对话区窗口采样），按时间正序。
+	// FetchPromptSnapshots 拉取时间窗内用于对话区窗口采样的会话快照，按时间正序。
+	// session 感知：session_id 非空的行每 session 取上下文最全的一条（最新请求），
+	// session 超过 count 个取最近 count 个；空 session_id 行保留均匀分布兜底。
 	FetchPromptSnapshots(ctx context.Context, userID int64, start, end time.Time, count int) ([]UserPromptSnippet, error)
 	// ListActiveUserIDs 列出时间窗内有用量的用户 ID。
 	ListActiveUserIDs(ctx context.Context, start, end time.Time) ([]int64, error)

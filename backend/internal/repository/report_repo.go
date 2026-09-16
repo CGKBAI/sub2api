@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -252,22 +253,67 @@ func (r *reportRepository) FetchUserTurns(ctx context.Context, userID int64, sta
 	return out, nil
 }
 
-// FetchPromptSnapshots 拉取时间窗内均匀分布的 count 条请求完整 prompt，按时间正序。
-// 用于对话区窗口采样：每条请求都是会话至今的快照，跨全天取多条可覆盖不同时段的工作。
+// FetchPromptSnapshots 拉取时间窗内用于对话区窗口采样的会话快照，按时间正序。
+// 选取策略（session 感知）：
+//  1. session_id 非空的行按 session 分组，各取该 session 最后一次请求的完整 prompt
+//     （同 session 每次请求都是"会话至今"的快照，最后一条上下文最全）；session 数
+//     超过 count 时取最近 count 个——多 session 用户不会漏掉整个会话；
+//  2. session_id 为空的行（迁移 234 前的历史数据/无会话头客户端）保留全天均匀分布兜底。
 func (r *reportRepository) FetchPromptSnapshots(ctx context.Context, userID int64, start, end time.Time, count int) ([]service.UserPromptSnippet, error) {
 	if count <= 0 {
-		count = 4
+		count = 8
 	}
 	client := clientFromContext(ctx, r.client)
 
-	rows, err := client.QueryContext(ctx, `
+	// ① 有 session_id：每 session 取最新一条，最多 count 个最近 session。
+	//    命中部分索引 idx_prompt_audit_events_session (user_id, session_id, created_at DESC)。
+	sessionRows, err := client.QueryContext(ctx, `
+		WITH session_last AS (
+		    SELECT session_id, MAX(created_at) AS last_at
+		    FROM prompt_audit_events
+		    WHERE user_id = $1 AND created_at >= $2 AND created_at < $3 AND session_id <> ''
+		    GROUP BY session_id
+		    ORDER BY last_at DESC
+		    LIMIT $4
+		),
+		picked AS (
+		    SELECT DISTINCT ON (e.session_id)
+		        e.session_id, COALESCE(e.model, '') AS model, e.created_at,
+		        COALESCE(NULLIF(e.full_prompt, ''), '') AS content
+		    FROM prompt_audit_events e
+		    JOIN session_last s ON e.session_id = s.session_id
+		    WHERE e.user_id = $1 AND e.created_at >= $2 AND e.created_at < $3
+		    ORDER BY e.session_id, e.created_at DESC, e.id DESC
+		)
+		SELECT model, created_at, content FROM picked ORDER BY created_at
+	`, userID, start, end, count)
+	if err != nil {
+		// 审计表不存在（未开启审计）等情况：返回空，报告退化为纯统计
+		return nil, nil
+	}
+	defer sessionRows.Close()
+
+	out := make([]service.UserPromptSnippet, 0, count*2)
+	for sessionRows.Next() {
+		var snip service.UserPromptSnippet
+		if err := sessionRows.Scan(&snip.Model, &snip.CreatedAt, &snip.Content); err != nil {
+			return out, err
+		}
+		out = append(out, snip)
+	}
+	if err := sessionRows.Err(); err != nil {
+		return out, err
+	}
+
+	// ② 无 session_id：均匀分布兜底
+	fallbackRows, err := client.QueryContext(ctx, `
 		WITH windowed AS (
 		    SELECT COALESCE(model, '') AS model, created_at,
 		           COALESCE(NULLIF(full_prompt, ''), '') AS content,
 		           ROW_NUMBER() OVER (ORDER BY id) AS rn,
 		           COUNT(*) OVER () AS total
 		    FROM prompt_audit_events
-		    WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
+		    WHERE user_id = $1 AND created_at >= $2 AND created_at < $3 AND session_id = ''
 		)
 		SELECT model, created_at, content FROM windowed
 		WHERE total <= $4
@@ -276,19 +322,24 @@ func (r *reportRepository) FetchPromptSnapshots(ctx context.Context, userID int6
 		ORDER BY created_at
 	`, userID, start, end, count)
 	if err != nil {
-		return nil, nil
+		return out, nil
 	}
-	defer rows.Close()
+	defer fallbackRows.Close()
 
-	out := make([]service.UserPromptSnippet, 0, count*2)
-	for rows.Next() {
+	for fallbackRows.Next() {
 		var snip service.UserPromptSnippet
-		if err := rows.Scan(&snip.Model, &snip.CreatedAt, &snip.Content); err != nil {
+		if err := fallbackRows.Scan(&snip.Model, &snip.CreatedAt, &snip.Content); err != nil {
 			return out, err
 		}
 		out = append(out, snip)
 	}
-	return out, rows.Err()
+	if err := fallbackRows.Err(); err != nil {
+		return out, err
+	}
+
+	// 两路结果各路内部已按时间正序，此处按时间归并保证整体正序
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
 }
 
 // ListActiveUserIDs 列出时间窗内有用量的用户。

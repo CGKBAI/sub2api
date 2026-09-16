@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-16（新增月报类型 + LLM 总结 prompt 融入 work-report 标准模板，已上线生产）。
+> 本文档是完整项目上下文。最后更新：2026-09-16 晚（**报告链路 v2 已实施代码**：日报素材按 session 分组、周报周期改为上周六~本周五纯日报聚合、月报聚合交集周报；单测+真实库 SQL 验证+33336 启动冒烟通过，待网页验证后发 stable，见 §8）。
 
 ## 1. 功能与当前状态总览
 
@@ -11,9 +11,10 @@
 3. ✅ **已上线生产**（33333，`sub2api:stable`）
 4. ✅ **月报类型**（2026-09-16）：迁移 233 放宽 CHECK；月报固定覆盖 ref 的**上一个自然月**（每月 1 日 20:20 生成上月，手动生成语义一致）；聚合优先级：当月周报 → 当月日报 → prompt 片段
 5. ✅ **LLM 总结 prompt 重写 ×2**（2026-09-16）：最终格式对齐团队模板——**标题由后端拼**（`reportTitle()`，姓名取 users.username，如 `# 工作日报（2026-09-15）- 谢翔宇`），LLM 只输出两个小节（`## 一、今日/本周/本月核心工作` + `## 二、明日/下周/下月工作计划`，平铺编号条目，无分类/优先级标注）；素材规则保留噪音过滤/合并同类/量化/脱敏；`ReportRepository.GetUsername()` 新增
-6. ✅ **报告素材双通道**（2026-09-16 晚）：①`FetchUserTurns` 逐请求头部提取用户真实输入（剥 <system-reminder> 前缀+噪音过滤+去重）——普通聊天/Claude Code 客户端有效；②`FetchPromptSnapshots`+对话区窗口采样（锚点 `</available_skills>` 后，全天 4 快照×8 窗口×700 字）——opencode 等智能体客户端用户输入埋在历史深处、且 reminder 字符串会出现在系统提示词讲解和文件内容里导致正则剥离不可靠，只能靠窗口采样。system prompt 含 ❌/✅ 反例（禁止'用了什么工具/模式/多少请求'类条目）。验证：谢翔宇 9/16 预览输出已为真实工作条目。**已知限制**：①单 session 超 64k 时审计截断丢最新几轮（仅保头部，opencode 客户端压缩可部分缓解）；②快照按全天序号均匀选取、未按 session 分组——多 session 用户可能漏 session，待办第 1 项解决
+6. ✅ **报告素材双通道**（2026-09-16 晚）：①`FetchUserTurns` 逐请求头部提取用户真实输入（剥 <system-reminder> 前缀+噪音过滤+去重）——普通聊天/Claude Code 客户端有效；②`FetchPromptSnapshots`+对话区窗口采样（锚点 `</available_skills>` 后，每 session 最全快照×均分窗口×700 字）——opencode 等智能体客户端用户输入埋在历史深处、且 reminder 字符串会出现在系统提示词讲解和文件内容里导致正则剥离不可靠，只能靠窗口采样。system prompt 含 ❌/✅ 反例（禁止'用了什么工具/模式/多少请求'类条目）。验证：谢翔宇 9/16 预览输出已为真实工作条目。**已知限制**：单 session 超 64k 时审计截断丢最新几轮（仅保头部，opencode 客户端压缩可部分缓解）；快照均匀选取未按 session 分组的限制已由 v2 解决（见第 8 项）
 7. ✅ **审计表 session 维度**（2026-09-16 晚）：迁移 234 给 prompt_audit_jobs/events 加 session_id（取自请求头 `ExtractClientSessionID` 单一入口），部分索引 (user_id, session_id, created_at)；Request→job→event 全链路穿透。注意：session_id 与 usage_logs 同源（客户端上报），历史数据为空
-6. ⏸ **飞书推送**：暂缓
+8. 🚧 **报告链路 v2**（2026-09-16 晚）：①日报素材按 session 分组总结（`FetchPromptSnapshots` 重写，session_id 自 9/16 17:54 起入库）；②周报周期从周一~周日改为**上周六~本周五**（`timezone.StartOfWeekSaturday()`，周五 20:10 生成，纯日报聚合，某天日报缺失直接跳过、不回填 prompt）；③月报聚合与上月有交集的周报（跨月周进两个月报）。代码+单测已完成（commit 见 git log），dev 33336 已部署，**待网页验证后发 stable**
+9. ⏸ **飞书推送**：暂缓
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -105,22 +106,52 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 2. `prompt_worker.go`：**扫描失败也落库**（fallback result decision=pass + scanner_version 标记，Complete 强制写 event，job 记 done）——消息必存的核心
 3. `report_llm.go`：输出剥离 `<think>...</think>`
 
-## 8. 待办
+## 8. 报告链路 v2 计划（2026-09-16 晚确定；阶段 1-3 代码已实施，阶段 4 进行中）
 
-- [ ] **【下一步·已确认方案】快照选取改为 session 感知**：`FetchPromptSnapshots`（backend/internal/repository/report_repo.go）重写——
-  ① `session_id <> ''` 的行 `GROUP BY session_id` 各取 `created_at` 最大一条（= 该 session 最全快照；session 数上限 8，超过取最近 8 个）；
-  ② `session_id = ''` 的行（历史数据/无会话头客户端）保留现有 `rn % (total/count)` 均匀分布兜底；
-  ③ 两路合并按时间正序返回。service 层窗口预算按 session 均分（总 ~32 窗、每 session ≤8 窗 ×700 字，report_service.go 常量 `reportSnapshotCount`/`conversationWindowsPerSnap` 相应调整）。
-  背景与实测：多 session 是常态（2026-09-16 usage_logs：user 5/6/8 各 3 个 session、user 2 两个）；当前②通道按全天请求序号 25%/50%/75%/100% 取快照，多 session 时可能漏整个 session 的对话区。
-  注意：9/16 白天旧数据 session_id 为空（迁移 234 之前），重生成走兜底路径效果与现状相同；session 分组对当晚 20:00 后的新数据生效。改完：单测 + go build + buildx 镜像 → 33336 冒烟 → 发 stable → commit + push fork（流程见 §4）
-- [ ] 用户验证：33333 网页登录 → "日报周报月报"页 → 日期选 2026-09-16 → "为所有活跃用户生成"，确认日报为真实工作条目（双通道已用真实数据预览验证：谢翔宇输出"调研 work-report 模板库/梳理 report 代码/规划整合方案"等真实条目）
-- [ ] 验证当晚 20:00 定时日报自动生成（新 prompt + 双通道素材 + 修好的 /v1 base_url）
-- [ ] 验证周五 20:10 首次周报 + 10 月 1 日 20:20 首次月报（月报聚合当月周报）
-- [x] push 到 fork 完成（CGKBAI/sub2api，2026-09-15；最新 f1c1e5fb2）
+> 用户已确认三项决策：①日报按 session 总结（session_id 自 9/16 晚起入库，此后数据都有）；②周报=**上周六~本周五**，纯日报聚合，某天日报缺失（休假/无记录）直接跳过该天、不回填 prompt；③月报=聚合当月各周的周报。原则：日→周→月逐级聚合，日报是唯一读原始存储（prompt_audit_events）的环节。
+
+### 阶段 1：日报素材按 session 分组（读取存储信息）✅ 已完成
+
+- [x] 重写 `FetchPromptSnapshots`（backend/internal/repository/report_repo.go）为两路查询：
+  - ① `session_id <> ''`：`GROUP BY session_id` 各取 `created_at` 最大一条（同 session 每次请求都是"会话至今"的快照，最后一条上下文最全）；session 数上限 8，超过取最近 8 个；
+  - ② `session_id = ''`（9/16 白天历史数据/无会话头客户端）：保留现有 `rn % (total/count)` 均匀分布兜底；
+  - ③ 两路合并按时间正序返回
+- [x] service 层窗口预算按 session 均分：总预算 32 窗（`conversationWindowBudget`）、单 session 上限 8（`conversationWindowsPerSnapCap`，注意 `sampleWindows` 最少 2 窗防除零）、session 快照上限 8 个（`reportSnapshotCount`）
+- [x] 单测：`report_period_test.go`（窗口预算 4 种场景）+ 新 SQL 已在真实库 psql 验证（user 5 两 session 各取最全快照 65537 字符；user 7 空 session 318 条均匀采样 10 条）
+- 背景：多 session 是常态（2026-09-16 usage_logs：user 5/6/8 各 3 个 session、user 2 两个）；旧逻辑按全天请求序号均匀取快照，多 session 时可能漏整个 session 的对话区。9/16 白天旧数据 session_id 为空（迁移 234 之前），重生成走兜底路径效果与旧版相同；session 分组对 9/16 17:54 后的新数据生效
+
+### 阶段 2：周报周期改为周六~周五 + 纯日报聚合 ✅ 已完成
+
+- [x] `timezone.StartOfWeekSaturday()` 新增（原 `StartOfWeek` 周一起点被配额/计费使用，未动）；`ReportPeriod` weekly 改为 **[上周六 00:00, 本周六 00:00)**，手动生成语义一致（ref 在周内任意时刻 → 生成该周六~周五的报告）
+- [x] 聚合保持 `appendSubReports(daily)`（report_service.go）：只聚合本周已成功的日报；某天无日报 → 跳过该天，不回填 prompt
+- [x] 全周 0 篇日报 → 保留现有降级（拉周内 prompt 片段）兜底
+- [x] 单测：周六周期边界（周五晚/周六/周日/周中/跨月共 7 例）+ 日报/月报回归
+- 说明：cron `10 20 * * 5` 与标题 MM.DD-MM.DD 格式不用改；时序天然满足（日报每天 20:00 生成 → 周报 20:10 聚合，当天日报已就绪）；旧周一周期报告与新周期在 reports 表共存（唯一索引按 user_id+type+period_start），互不影响；月报聚合周报 pageSize 6→8（留余量）
+
+### 阶段 3：月报聚合交集周报 ✅ 验证通过（原实现即满足）
+
+- [x] 聚合对象 = 与上月**有交集**的所有周报（repo List 周期覆盖语义，report_repo.go）；跨月周（如 8/29~9/4）同时进 8 月和 9 月两个月报，保证不丢内容，LLM 合并同类天然去重
+- [x] 降级链保留：周报 → 日报 → prompt 片段（现状）
+- 说明：cron 每月 1 日 20:20 生成上月不变（= 月底总结每一周）；生成时上月周报已全部就绪（每周五 20:10）
+
+### 阶段 4：验证与发布（进行中）
+
+- [x] 单测全绿（report 相关 + timezone 包；payment 相关 FAIL 为存量问题，干净树复现确认与本次无关）+ go build/go vet 通过 → buildx dev 镜像 → 33336 启动冒烟（HTTP 200、无 panic、迁移正常）
+- [ ] 用户网页验证（dev 33336 或 stable 33333）："日报周报月报"页 → 周期选 2026-09-16 生成日报（session 素材）+ 生成周报（确认 period=09.12-09.18 周六起、聚合日报条目）
+- [ ] 观察当晚 20:00 定时日报（session 分组首次生效）
+- [ ] 观察周五 20:10 首次周报（周六周期 + 纯日报聚合）+ 10 月 1 日 20:20 首次月报（聚合交集周报）
+- [ ] 用户确认后：发 stable → commit + push fork
+
+### 后续迭代
+
+- [ ] 飞书推送
+
+### 已完成（归档）
+
+- [x] push 到 fork 完成（CGKBAI/sub2api，2026-09-15；最新 a864673af）
 - [x] 月报类型 + 模板化 LLM prompt 上线（2026-09-16）
 - [x] 双通道报告素材 + 审计 session_id 入库（2026-09-16 晚，commit 40ab07449）
 - [x] LLM 配置修复：base_url 补 /v1、max_prompts=60、truncate=800（SQL 直改 settings 已生效）
-- [ ] （后续迭代）飞书推送
 
 ## 9. 环境速记
 

@@ -21,13 +21,15 @@ const reportLLMTimeout = 120 * time.Second
 // maxReportTurns 单次报告生成最多读取的请求条数（覆盖一天的量级）。
 const maxReportTurns = 300
 
-// 报告对话窗口采样参数：跨全天取 reportSnapshotCount 个会话快照，
-// 每个快照的对话区均匀抽 conversationWindowsPerSnapshot 个窗口。
+// 报告对话窗口采样参数：快照按 session 分组拉取（每 session 取最全一条，最多
+// reportSnapshotCount 个 session）；全部窗口预算 conversationWindowBudget 按
+// session 数均分，单 session 不超过 conversationWindowsPerSnapCap 个窗口。
 const (
-	reportSnapshotCount         = 4
-	conversationWindowsPerSnap  = 8
-	conversationWindowRunes     = 700
-	conversationRegionAnchor    = "</available_skills>"
+	reportSnapshotCount           = 8
+	conversationWindowBudget      = 32
+	conversationWindowsPerSnapCap = 8
+	conversationWindowRunes       = 700
+	conversationRegionAnchor      = "</available_skills>"
 )
 
 // ReportService 日报/周报核心服务。
@@ -49,6 +51,8 @@ func NewReportService(reportRepo ReportRepository, settingRepo SettingRepository
 }
 
 // ReportPeriod 根据报告类型与基准时间计算周期边界 [start, end)。
+// 周报为「周六起点周」[上周六 00:00, 本周六 00:00)：周五晚定时生成时覆盖前 7 个
+// 完整自然日，手动生成语义一致（ref 在周内任意时刻 → 该周六~周五报告）。
 // 月报固定覆盖 ref 的上一个自然月：每月 1 日定时生成上月，手动生成语义一致
 //（如 ref 在 9 月任意一天 → 生成 8 月月报，8 月月报用 9 月任意日期可重试）。
 func ReportPeriod(reportType string, ref time.Time) (time.Time, time.Time, error) {
@@ -57,7 +61,7 @@ func ReportPeriod(reportType string, ref time.Time) (time.Time, time.Time, error
 		start := timezone.StartOfDay(ref)
 		return start, start.Add(24 * time.Hour), nil
 	case domain.ReportTypeWeekly:
-		start := timezone.StartOfWeek(ref)
+		start := timezone.StartOfWeekSaturday(ref)
 		return start, start.Add(7 * 24 * time.Hour), nil
 	case domain.ReportTypeMonthly:
 		end := timezone.StartOfMonth(ref)
@@ -244,7 +248,7 @@ func (s *ReportService) buildSummary(
 	case domain.ReportTypeWeekly:
 		aggregated = s.appendSubReports(ctx, &userPrompt, domain.ReportTypeDaily, start, end, 7, userID)
 	case domain.ReportTypeMonthly:
-		aggregated = s.appendSubReports(ctx, &userPrompt, domain.ReportTypeWeekly, start, end, 6, userID)
+		aggregated = s.appendSubReports(ctx, &userPrompt, domain.ReportTypeWeekly, start, end, 8, userID)
 		if !aggregated {
 			aggregated = s.appendSubReports(ctx, &userPrompt, domain.ReportTypeDaily, start, end, 31, userID)
 		}
@@ -263,12 +267,13 @@ func (s *ReportService) buildSummary(
 			}
 		}
 		// 智能体客户端（opencode 等）的用户输入混在会话历史深处，头部提取拿不到；
-		// 补充跨时段快照的对话区窗口采样，覆盖全天工作脉络。
+		// 补充会话快照的对话区窗口采样，覆盖全周期工作脉络。
+		// 快照按 session 分组：每 session 取上下文最全的一条，最多 reportSnapshotCount 个。
 		snaps, serr := s.reportRepo.FetchPromptSnapshots(ctx, userID, start, end, reportSnapshotCount)
 		if serr == nil && len(snaps) > 0 {
 			windows := collectConversationWindows(snaps)
 			if len(windows) > 0 {
-				userPrompt.WriteString(fmt.Sprintf("\n### 对话记录片段（截取自 %d 个时间点的会话快照，按时间排列，含用户输入/助手回复/工具输出）\n", len(snaps)))
+				userPrompt.WriteString(fmt.Sprintf("\n### 对话记录片段（截取自 %d 个会话的最完整快照，每会话均匀采样，按时间排列，含用户输入/助手回复/工具输出）\n", len(snaps)))
 				for _, w := range windows {
 					userPrompt.WriteString("- " + w + "\n")
 				}
@@ -427,14 +432,26 @@ func turnDedupKey(s string) string {
 	return b.String()
 }
 
-// collectConversationWindows 从每个会话快照的「对话区」均匀抽取窗口。
+// collectConversationWindows 从每个会话快照的「对话区」抽取窗口。
+// 总窗口预算按 session 数均分（单 session 上限 conversationWindowsPerSnapCap）：
+// session 多时每 session 窗口变少、少时变多，总传输量稳定在预算附近。
 // 对话区定位：优先取 available_skills 清单结束标记之后的内容（opencode 等
 // 智能体客户端把系统提示词/工具/技能清单放在前部，真实对话在其后）；
 // 无该标记时从头开始（普通聊天客户端历史即对话）。
 func collectConversationWindows(snaps []UserPromptSnippet) []string {
-	out := make([]string, 0, len(snaps)*conversationWindowsPerSnap)
+	if len(snaps) == 0 {
+		return nil
+	}
+	per := conversationWindowBudget / len(snaps)
+	if per < 1 {
+		per = 1
+	}
+	if per > conversationWindowsPerSnapCap {
+		per = conversationWindowsPerSnapCap
+	}
+	out := make([]string, 0, len(snaps)*per)
 	for _, s := range snaps {
-		out = append(out, sampleWindows(s.Content, conversationWindowsPerSnap, conversationWindowRunes)...)
+		out = append(out, sampleWindows(s.Content, per, conversationWindowRunes)...)
 	}
 	return out
 }

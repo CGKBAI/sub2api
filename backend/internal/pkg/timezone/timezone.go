@@ -116,6 +116,15 @@ func StartOfWeek(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day()-weekday+1, 0, 0, 0, 0, loc)
 }
 
+// StartOfWeekSaturday 返回给定时间所在「周六起点周」的起始（周六 00:00:00）。
+// 周报周期为上周六~本周五：周五晚生成时恰好覆盖此前 7 个完整自然日。
+func StartOfWeekSaturday(t time.Time) time.Time {
+	loc := Location()
+	t = t.In(loc)
+	offset := (int(t.Weekday()) + 1) % 7 // 周六=0、周日=1、…、周五=6
+	return time.Date(t.Year(), t.Month(), t.Day()-offset, 0, 0, 0, 0, loc)
+}
+
 // StartOfMonth returns the start of the month (1st day 00:00:00) for the given time.
 func StartOfMonth(t time.Time) time.Time {
 	loc := Location()
