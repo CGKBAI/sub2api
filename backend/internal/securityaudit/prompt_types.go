@@ -68,6 +68,7 @@ const (
 
 type Request struct {
 	RequestID  string
+	SessionID  string
 	UserID     int64
 	Username   string
 	UserEmail  string
@@ -111,6 +112,7 @@ type PromptSnapshot struct {
 	PromptLength       int    `json:"prompt_length"`
 	MessageCount       int    `json:"message_count"`
 	Stage              string `json:"stage"`
+	SessionID          string `json:"session_id"`
 
 	ScanText string `json:"-"`
 }

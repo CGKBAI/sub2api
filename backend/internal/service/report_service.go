@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,18 @@ import (
 )
 
 const reportLLMTimeout = 120 * time.Second
+
+// maxReportTurns 单次报告生成最多读取的请求条数（覆盖一天的量级）。
+const maxReportTurns = 300
+
+// 报告对话窗口采样参数：跨全天取 reportSnapshotCount 个会话快照，
+// 每个快照的对话区均匀抽 conversationWindowsPerSnapshot 个窗口。
+const (
+	reportSnapshotCount         = 4
+	conversationWindowsPerSnap  = 8
+	conversationWindowRunes     = 700
+	conversationRegionAnchor    = "</available_skills>"
+)
 
 // ReportService 日报/周报核心服务。
 type ReportService struct {
@@ -238,16 +251,27 @@ func (s *ReportService) buildSummary(
 	}
 
 	if !aggregated && (cfg.Enabled || (cfg.BaseURL != "" && cfg.APIKey != "" && cfg.Model != "")) {
-		prompts, err := s.reportRepo.FetchUserPrompts(ctx, userID, start, end, cfg.MaxPrompts)
-		if err == nil && len(prompts) > 0 {
-			stats.PromptCount = int64(len(prompts))
-			userPrompt.WriteString(fmt.Sprintf("\n### Prompt 片段（全天均匀抽样 %d 条，每条截断 %d 字符，按时间正序）\n", len(prompts), cfg.PromptTruncateChars))
-			for _, p := range prompts {
-				content := truncateRunes(p.Content, cfg.PromptTruncateChars)
-				if strings.TrimSpace(content) == "" {
-					continue
+		turns, err := s.reportRepo.FetchUserTurns(ctx, userID, start, end, maxReportTurns)
+		if err == nil && len(turns) > 0 {
+			stats.PromptCount = int64(len(turns))
+			items := collectUserTurns(turns, cfg.PromptTruncateChars)
+			if len(items) > 0 {
+				userPrompt.WriteString(fmt.Sprintf("\n### 用户提问记录（共 %d 次请求，提取去重后 %d 条有效提问，按时间正序）\n", len(turns), len(items)))
+				for _, it := range items {
+					userPrompt.WriteString(it + "\n")
 				}
-				userPrompt.WriteString(fmt.Sprintf("- [%s][%s] %s\n", p.CreatedAt.Format("15:04"), p.Model, content))
+			}
+		}
+		// 智能体客户端（opencode 等）的用户输入混在会话历史深处，头部提取拿不到；
+		// 补充跨时段快照的对话区窗口采样，覆盖全天工作脉络。
+		snaps, serr := s.reportRepo.FetchPromptSnapshots(ctx, userID, start, end, reportSnapshotCount)
+		if serr == nil && len(snaps) > 0 {
+			windows := collectConversationWindows(snaps)
+			if len(windows) > 0 {
+				userPrompt.WriteString(fmt.Sprintf("\n### 对话记录片段（截取自 %d 个时间点的会话快照，按时间排列，含用户输入/助手回复/工具输出）\n", len(snaps)))
+				for _, w := range windows {
+					userPrompt.WriteString("- " + w + "\n")
+				}
 			}
 		}
 	}
@@ -288,6 +312,158 @@ func reportTitle(reportType string, start time.Time, username string) string {
 	default:
 		return fmt.Sprintf("# 工作日报（%s）%s", start.Format("2006-01-02"), suffix)
 	}
+}
+
+// =========================
+// 用户提问提取（日报素材）
+// =========================
+
+var userTurnReminderRe = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
+
+// userTurnContextMarkers：上下文部分（拼接在用户消息之后）的开头噪音特征，
+// 命中即认为用户输入到此为止。
+var userTurnContextMarkers = []string{
+	"\n\nYou are ", "\n\nThe user ", "\n\n<system", "\n\n```", "\n\n{", "\n\nx-anthropic",
+}
+
+// userTurnNoisePrefixes：提取结果若以这些开头，判定为工具/系统输出而非用户输入。
+var userTurnNoisePrefixes = []string{
+	"You are ", "The user ", "<", "{", "[", "```", "#", "IMPORTANT", "I'll", "I will",
+}
+
+// collectUserTurns 从逐次请求快照中提取用户真实提问并去重（时间正序）。
+// 同一 session 自动续跑会产生大量内容相同的请求，按前缀去重后得到当天有效提问清单。
+func collectUserTurns(turns []UserPromptSnippet, truncateChars int) []string {
+	seen := make(map[string]struct{}, len(turns))
+	items := make([]string, 0, 16)
+	for _, t := range turns {
+		intent := extractUserTurn(t.Content, truncateChars)
+		if intent == "" {
+			continue
+		}
+		key := turnDedupKey(intent)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		items = append(items, fmt.Sprintf("- [%s][%s] %s", t.CreatedAt.Format("15:04"), t.Model, intent))
+	}
+	return items
+}
+
+// extractUserTurn 从拍平 prompt 头部提取该次请求的用户真实输入。
+// 审计落库顺序为「该次请求最后一条用户消息」在前：剥掉头部注入的
+// <system-reminder> 块后，剩余开头即用户文本；再截到上下文噪音边界，
+// 过滤纯工具输出，最后按配置截断。
+func extractUserTurn(raw string, truncateChars int) string {
+	if truncateChars <= 0 {
+		truncateChars = 500
+	}
+	s := strings.TrimSpace(raw)
+	// 剥离头部连续的注入块（opencode/agent 会把提醒塞进用户消息开头）
+	for strings.HasPrefix(s, "<system-reminder>") {
+		loc := userTurnReminderRe.FindStringIndex(s)
+		if loc == nil {
+			return "" // 未闭合的注入块：整段视为噪音
+		}
+		s = strings.TrimSpace(s[loc[1]:])
+	}
+	if s == "" {
+		return ""
+	}
+	for _, marker := range userTurnContextMarkers {
+		if i := strings.Index(s, marker); i > 0 {
+			s = s[:i]
+		}
+	}
+	s = strings.TrimSpace(s)
+	if !looksLikeUserTurn(s) {
+		return ""
+	}
+	return truncateRunes(s, truncateChars)
+}
+
+// looksLikeUserTurn 过滤工具输出/系统文本：噪音开头特征直接排除；
+// 含中文（团队主要输入语言）放行；纯英文需为短指令。
+func looksLikeUserTurn(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, p := range userTurnNoisePrefixes {
+		if strings.HasPrefix(s, p) {
+			return false
+		}
+	}
+	if countCJKRunes(s) >= 2 {
+		return true
+	}
+	return len([]rune(s)) <= 160
+}
+
+func countCJKRunes(s string) int {
+	n := 0
+	for _, r := range s {
+		if (r >= 0x4e00 && r <= 0x9fff) || (r >= 0x3400 && r <= 0x4dbf) {
+			n++
+		}
+	}
+	return n
+}
+
+// turnDedupKey 取前 64 个 rune（忽略空白）作为去重键。
+func turnDedupKey(s string) string {
+	var b strings.Builder
+	count := 0
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			continue
+		}
+		b.WriteRune(r)
+		count++
+		if count >= 64 {
+			break
+		}
+	}
+	return b.String()
+}
+
+// collectConversationWindows 从每个会话快照的「对话区」均匀抽取窗口。
+// 对话区定位：优先取 available_skills 清单结束标记之后的内容（opencode 等
+// 智能体客户端把系统提示词/工具/技能清单放在前部，真实对话在其后）；
+// 无该标记时从头开始（普通聊天客户端历史即对话）。
+func collectConversationWindows(snaps []UserPromptSnippet) []string {
+	out := make([]string, 0, len(snaps)*conversationWindowsPerSnap)
+	for _, s := range snaps {
+		out = append(out, sampleWindows(s.Content, conversationWindowsPerSnap, conversationWindowRunes)...)
+	}
+	return out
+}
+
+// sampleWindows 在 region 内均匀抽 n 个长为 size（rune）的窗口，去掉首尾空白。
+func sampleWindows(text string, n, size int) []string {
+	region := text
+	if i := strings.Index(region, conversationRegionAnchor); i >= 0 {
+		region = region[i+len(conversationRegionAnchor):]
+	}
+	runes := []rune(region)
+	if len(runes) <= size {
+		if w := strings.TrimSpace(region); w != "" {
+			return []string{w}
+		}
+		return nil
+	}
+	if n < 2 {
+		n = 2
+	}
+	step := (len(runes) - size) / (n - 1)
+	windows := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		start := i * step
+		if w := strings.TrimSpace(string(runes[start : start+size])); w != "" {
+			windows = append(windows, w)
+		}
+	}
+	return windows
 }
 
 // appendSubReports 把周期内已生成的子报告（日报/周报）AI 摘要按时间正序追加进 LLM
@@ -334,11 +510,13 @@ func reportSystemPrompt(reportType string) string {
 	b.WriteString("你是团队 AI 网关的工作报告助手，根据用户在网关上的请求统计与 prompt 片段，推断该用户本周期做了什么，用简体中文输出 Markdown。\n\n")
 
 	b.WriteString("素材规则：\n")
-	b.WriteString("1. prompt 片段是「用户最新消息 + 历史上下文」的拍平文本：优先依据开头的用户真实输入判断工作意图；其中大段重复出现的系统提示词、工具注入的规则/环境说明属于噪音，仅用于识别所用工具与场景，不要当作工作内容复述。\n")
-	b.WriteString("2. 同类工作必须合并：多次调试/提交同一功能合并为一条（如「完成 XX 功能开发与调试」）。\n")
-	b.WriteString("3. 每条一句话、不超过 30 字，动词开头：完成/修复/优化/调研/部署/搭建/实现/升级/开发。\n")
-	b.WriteString("4. 条目要具体，可含技术细节（如「升级 Pi 相关依赖至 0.85.1」「session 存储到 Postgres」）；能量化则量化（次数、个数），严禁编造未提供的数字。\n")
-	b.WriteString("5. 严禁输出 prompt 原文中的密钥、token、密码等敏感信息；只做摘要，不逐条复述原文。\n\n")
+	b.WriteString("1. 素材分两部分：「用户提问记录」是从每次请求中提取的用户真实输入；「对话记录片段」截取自会话快照（含用户输入、助手回复、工具输出，大致按时间排列）。据此推断实际做了什么工作：用户输入表达意图，助手回复和工具输出（读/写文件、执行命令、部署）反映实际操作。\n")
+	b.WriteString("2. 素材中混有系统提示词、注入说明、文件内容等噪音——只用于理解场景，不要当作工作内容复述。\n")
+	b.WriteString("3. 同类工作必须合并：多次调试/提交同一功能合并为一条（如「完成 XX 功能开发与调试」）。\n")
+	b.WriteString("4. 每条一句话、不超过 30 字，动词开头：完成/修复/优化/调研/部署/搭建/实现/升级/开发。\n")
+	b.WriteString("5. 条目要写「做了什么」（对象+动作+结果），禁止写「用什么工具/什么模式/多少请求」：\n   ❌ 使用 opencode CLI 工具进行代码开发（累计 180 次请求）\n   ❌ 在 plan mode 与 build mode 模式间切换推进任务\n   ✅ 整理 work-report 模板并接入 sub2api 日报/周报/月报生成\n   ✅ 修复报告页周报/月报查不到数据的问题\n")
+	b.WriteString("6. 能量化则量化（次数、个数），严禁编造未提供的数字。\n")
+	b.WriteString("7. 严禁输出素材中的密钥、token、密码等敏感信息；只做摘要，不逐条复述原文。\n\n")
 
 	switch reportType {
 	case domain.ReportTypeWeekly:

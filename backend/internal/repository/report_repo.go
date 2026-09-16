@@ -211,29 +211,21 @@ func (r *reportRepository) AggregateUserUsage(ctx context.Context, userID int64,
 	return stats, nil
 }
 
-// FetchUserPrompts 拉取 prompt_audit_events 中的 prompt 片段（全天均匀抽样，按时间正序）。
-// 单纯取最新 N 条会只覆盖傍晚的请求、丢掉早晨的工作；这里按 ROW_NUMBER 取模分桶，
-// 覆盖整个统计周期。总数不超过 limit 时全量返回。
-func (r *reportRepository) FetchUserPrompts(ctx context.Context, userID int64, start, end time.Time, limit int) ([]service.UserPromptSnippet, error) {
+// FetchUserTurns 拉取用户在时间窗内的逐次请求快照（最新 limit 条），按时间正序返回。
+// 每条只取拍平 prompt 的前 2000 字符：审计落库顺序为「该次请求最后一条用户消息 +
+// 其余上下文」，头部即用户输入所在；截头部可让上层提取真实提问，避免全量 64k 传输。
+func (r *reportRepository) FetchUserTurns(ctx context.Context, userID int64, start, end time.Time, limit int) ([]service.UserPromptSnippet, error) {
 	if limit <= 0 {
-		limit = 30
+		limit = 300
 	}
 	client := clientFromContext(ctx, r.client)
 
 	rows, err := client.QueryContext(ctx, `
-		WITH windowed AS (
-		    SELECT COALESCE(model, '') AS model,
-		           created_at,
-		           COALESCE(NULLIF(full_prompt, ''), NULLIF(redacted_preview, ''), '') AS content,
-		           ROW_NUMBER() OVER (ORDER BY created_at) AS rn,
-		           COUNT(*) OVER () AS total
-		    FROM prompt_audit_events
-		    WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
-		)
-		SELECT model, created_at, content
-		FROM windowed
-		WHERE total <= $4 OR (rn - 1) % ((total + $4 - 1) / $4) = 0
-		ORDER BY created_at
+		SELECT COALESCE(model, ''), created_at,
+		       left(COALESCE(NULLIF(full_prompt, ''), NULLIF(redacted_preview, ''), ''), 2000) AS content
+		FROM prompt_audit_events
+		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
+		ORDER BY created_at DESC
 		LIMIT $4
 	`, userID, start, end, limit)
 	if err != nil {
@@ -243,6 +235,52 @@ func (r *reportRepository) FetchUserPrompts(ctx context.Context, userID int64, s
 	defer rows.Close()
 
 	out := make([]service.UserPromptSnippet, 0, limit)
+	for rows.Next() {
+		var snip service.UserPromptSnippet
+		if err := rows.Scan(&snip.Model, &snip.CreatedAt, &snip.Content); err != nil {
+			return out, err
+		}
+		out = append(out, snip)
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	// 倒序读取，反转为时间正序
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}
+
+// FetchPromptSnapshots 拉取时间窗内均匀分布的 count 条请求完整 prompt，按时间正序。
+// 用于对话区窗口采样：每条请求都是会话至今的快照，跨全天取多条可覆盖不同时段的工作。
+func (r *reportRepository) FetchPromptSnapshots(ctx context.Context, userID int64, start, end time.Time, count int) ([]service.UserPromptSnippet, error) {
+	if count <= 0 {
+		count = 4
+	}
+	client := clientFromContext(ctx, r.client)
+
+	rows, err := client.QueryContext(ctx, `
+		WITH windowed AS (
+		    SELECT COALESCE(model, '') AS model, created_at,
+		           COALESCE(NULLIF(full_prompt, ''), '') AS content,
+		           ROW_NUMBER() OVER (ORDER BY id) AS rn,
+		           COUNT(*) OVER () AS total
+		    FROM prompt_audit_events
+		    WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
+		)
+		SELECT model, created_at, content FROM windowed
+		WHERE total <= $4
+		   OR (rn - 1) % GREATEST(1, total / $4) = 0
+		   OR rn = total
+		ORDER BY created_at
+	`, userID, start, end, count)
+	if err != nil {
+		return nil, nil
+	}
+	defer rows.Close()
+
+	out := make([]service.UserPromptSnippet, 0, count*2)
 	for rows.Next() {
 		var snip service.UserPromptSnippet
 		if err := rows.Scan(&snip.Model, &snip.CreatedAt, &snip.Content); err != nil {
