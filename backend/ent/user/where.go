@@ -180,6 +180,11 @@ func RpmLimit(v int) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldRpmLimit, v))
 }
 
+// ReportPushEnabled applies equality check predicate on the "report_push_enabled" field. It's identical to ReportPushEnabledEQ.
+func ReportPushEnabled(v bool) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldReportPushEnabled, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldCreatedAt, v))
@@ -1398,6 +1403,16 @@ func RpmLimitLT(v int) predicate.User {
 // RpmLimitLTE applies the LTE predicate on the "rpm_limit" field.
 func RpmLimitLTE(v int) predicate.User {
 	return predicate.User(sql.FieldLTE(FieldRpmLimit, v))
+}
+
+// ReportPushEnabledEQ applies the EQ predicate on the "report_push_enabled" field.
+func ReportPushEnabledEQ(v bool) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldReportPushEnabled, v))
+}
+
+// ReportPushEnabledNEQ applies the NEQ predicate on the "report_push_enabled" field.
+func ReportPushEnabledNEQ(v bool) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldReportPushEnabled, v))
 }
 
 // HasAPIKeys applies the HasEdge predicate on the "api_keys" edge.

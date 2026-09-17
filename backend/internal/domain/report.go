@@ -23,6 +23,9 @@ var (
 	ErrReportInvalidPeriod    = infraerrors.BadRequest("REPORT_PERIOD_INVALID", "report period is invalid")
 	ErrReportLLMNotConfigured = infraerrors.BadRequest("REPORT_LLM_NOT_CONFIGURED", "report LLM is not configured")
 	ErrReportLLMCallFailed    = infraerrors.BadRequest("REPORT_LLM_CALL_FAILED", "report LLM call failed")
+
+	ErrReportFeishuNotConfigured = infraerrors.BadRequest("REPORT_FEISHU_NOT_CONFIGURED", "feishu push is not configured")
+	ErrReportFeishuPushFailed    = infraerrors.BadRequest("REPORT_FEISHU_PUSH_FAILED", "feishu push failed")
 )
 
 // ReportStats 是 reports.stats 列的 JSON 结构：一个周期内的聚合统计。

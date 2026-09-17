@@ -14,7 +14,12 @@ export default {
       generating: '生成中…',
       generateFor: '为此人生成',
       retry: '重试',
-      settings: 'AI 总结设置'
+      settings: 'AI 总结设置',
+      push: '发送到飞书',
+      pushing: '发送中…',
+      pushSuccess: '已推送到飞书群',
+      autoPush: '参与飞书自动推送',
+      autoPushHint: '关闭后报告生成不再自动推送到飞书群，仍可手动发送'
     },
     stats: {
       requests: '请求',
@@ -43,6 +48,17 @@ export default {
       dailySchedule: '日报 cron（分 时 日 月 周）',
       weeklySchedule: '周报 cron（分 时 日 月 周）',
       monthlySchedule: '月报 cron（每月 1 日生成上月）',
+      feishuSection: '飞书推送',
+      feishuDescription: '通过群自定义机器人 Webhook 把报告卡片推送到飞书群；在飞书群「设置 → 群机器人 → 添加自定义机器人」获取。',
+      feishuEnabled: '启用飞书推送',
+      feishuWebhook: 'Webhook 地址',
+      feishuWebhookPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/…，留空表示不修改',
+      feishuSecret: '加签密钥（可选）',
+      feishuSecretPlaceholder: '留空表示不修改',
+      feishuPushTypes: '自动推送类型',
+      feishuPushDaily: '日报',
+      feishuPushWeekly: '周报',
+      feishuPushMonthly: '月报',
       save: '保存',
       cancel: '取消',
       saved: '已保存'

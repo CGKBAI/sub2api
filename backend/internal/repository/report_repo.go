@@ -381,6 +381,21 @@ func (r *reportRepository) GetUsername(ctx context.Context, userID int64) (strin
 	return u.Username, nil
 }
 
+// IsReportPushEnabled 查询用户是否参与报告飞书自动推送。
+// 用户不存在或已删除时返回 false。
+func (r *reportRepository) IsReportPushEnabled(ctx context.Context, userID int64) (bool, error) {
+	u, err := r.client.User.Query().
+		Where(user.ID(userID)).
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return u.ReportPushEnabled, nil
+}
+
 // attachUsernames 批量补齐 username（users 表 LEFT JOIN 等价实现）。
 func (r *reportRepository) attachUsernames(ctx context.Context, items []*service.Report) {
 	if len(items) == 0 {

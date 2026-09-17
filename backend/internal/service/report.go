@@ -25,6 +25,9 @@ var (
 	ErrReportInvalidPeriod    = domain.ErrReportInvalidPeriod
 	ErrReportLLMNotConfigured = domain.ErrReportLLMNotConfigured
 	ErrReportLLMCallFailed    = domain.ErrReportLLMCallFailed
+
+	ErrReportFeishuNotConfigured = domain.ErrReportFeishuNotConfigured
+	ErrReportFeishuPushFailed    = domain.ErrReportFeishuPushFailed
 )
 
 type Report = domain.Report
@@ -60,6 +63,8 @@ type ReportRepository interface {
 	ListActiveUserIDs(ctx context.Context, start, end time.Time) ([]int64, error)
 	// GetUsername 查询用户显示名（users.username，用于报告标题）。
 	GetUsername(ctx context.Context, userID int64) (string, error)
+	// IsReportPushEnabled 查询用户是否参与报告飞书自动推送（users.report_push_enabled）。
+	IsReportPushEnabled(ctx context.Context, userID int64) (bool, error)
 }
 
 // UserPromptSnippet 是用于 LLM 总结的单条 prompt 片段。

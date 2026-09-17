@@ -144,6 +144,7 @@ func registerReportRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		reports.PUT("/config", h.Admin.Reports.UpdateConfig)
 		reports.POST("/generate", h.Admin.Reports.Generate)
 		reports.POST("/generate-all", h.Admin.Reports.GenerateAll)
+		reports.POST("/:id/push", h.Admin.Reports.Push)
 		reports.GET("/:id", h.Admin.Reports.GetByID)
 	}
 }

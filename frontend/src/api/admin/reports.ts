@@ -43,6 +43,12 @@ export interface ReportLLMConfig {
   daily_schedule: string
   weekly_schedule: string
   monthly_schedule: string
+  feishu_enabled: boolean
+  feishu_webhook_url: string
+  feishu_secret: string
+  feishu_push_daily: boolean
+  feishu_push_weekly: boolean
+  feishu_push_monthly: boolean
 }
 
 export interface ReportListFilters {
@@ -95,11 +101,20 @@ export async function getConfig(): Promise<ReportLLMConfig> {
 }
 
 export async function updateConfig(
-  request: Partial<Omit<ReportLLMConfig, 'api_key'>> & { api_key?: string }
+  request: Partial<Omit<ReportLLMConfig, 'api_key' | 'feishu_webhook_url' | 'feishu_secret'>> & {
+    api_key?: string
+    feishu_webhook_url?: string
+    feishu_secret?: string
+  }
 ): Promise<ReportLLMConfig> {
   const { data } = await apiClient.put<ReportLLMConfig>('/admin/reports/config', request)
   return data
 }
 
-const reportsAPI = { list, getById, generate, generateAll, getConfig, updateConfig }
+export async function pushToFeishu(id: number): Promise<Report> {
+  const { data } = await apiClient.post<Report>(`/admin/reports/${id}/push`)
+  return data
+}
+
+const reportsAPI = { list, getById, generate, generateAll, getConfig, updateConfig, pushToFeishu }
 export default reportsAPI

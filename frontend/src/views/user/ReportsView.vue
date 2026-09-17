@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import userReportsAPI, { type Report, type ReportType } from '@/api/reports'
+import { getProfile, updateProfile } from '@/api/user'
 import { useAppStore } from '@/stores/app'
 import { EmptyState, LoadingSpinner } from '@/components/common'
 
@@ -16,6 +17,46 @@ const activeTab = ref<ReportType>('daily')
 const date = ref(todayStr())
 const loading = ref(false)
 const reports = ref<Report[]>([])
+
+// 飞书推送
+const reportPushEnabled = ref(true)
+const savingPushToggle = ref(false)
+const pushingReportId = ref<number | null>(null)
+
+async function loadProfile() {
+  try {
+    const profile = await getProfile()
+    reportPushEnabled.value = profile.report_push_enabled ?? true
+  } catch {
+    // profile 读取失败不阻塞报告页，开关保持默认参与
+  }
+}
+
+async function togglePush(enabled: boolean) {
+  const previous = reportPushEnabled.value
+  reportPushEnabled.value = enabled
+  savingPushToggle.value = true
+  try {
+    await updateProfile({ report_push_enabled: enabled })
+  } catch (error: any) {
+    reportPushEnabled.value = previous
+    appStore.showError(error?.message || String(error))
+  } finally {
+    savingPushToggle.value = false
+  }
+}
+
+async function pushToFeishu(report: Report) {
+  pushingReportId.value = report.id
+  try {
+    await userReportsAPI.pushMyReportToFeishu(report.id)
+    appStore.showSuccess(t('admin.reports.actions.pushSuccess'))
+  } catch (error: any) {
+    appStore.showError(error?.message || String(error))
+  } finally {
+    pushingReportId.value = null
+  }
+}
 
 function todayStr(): string {
   const d = new Date()
@@ -40,7 +81,10 @@ async function load() {
 }
 
 watch([activeTab, date], load)
-onMounted(load)
+onMounted(() => {
+  load()
+  loadProfile()
+})
 
 function renderMarkdown(content: string): string {
   if (!content) return ''
@@ -81,6 +125,16 @@ const modelEntries = (report: Report) =>
       <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
         {{ t('admin.reports.description') }}
       </p>
+      <label class="mt-2 flex w-fit items-center gap-2 text-sm text-gray-700 dark:text-gray-200" :title="t('admin.reports.actions.autoPushHint')">
+        <input
+          v-model="reportPushEnabled"
+          type="checkbox"
+          class="checkbox"
+          :disabled="savingPushToggle"
+          @change="togglePush(reportPushEnabled)"
+        />
+        {{ t('admin.reports.actions.autoPush') }}
+      </label>
     </div>
 
     <!-- Tab + 日期 -->
@@ -129,6 +183,13 @@ const modelEntries = (report: Report) =>
           <span class="ml-auto text-xs text-gray-500 dark:text-gray-400">
             {{ periodLabel(report) }}
           </span>
+          <button
+            class="btn btn-secondary shrink-0 px-3 py-1 text-xs"
+            :disabled="pushingReportId === report.id"
+            @click="pushToFeishu(report)"
+          >
+            {{ pushingReportId === report.id ? t('admin.reports.actions.pushing') : t('admin.reports.actions.push') }}
+          </button>
         </div>
 
         <div class="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">

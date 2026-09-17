@@ -111,6 +111,8 @@ type UserUpdateFields struct {
 	BalanceNotifySettings bool
 	// BalanceNotifyExtraEmails 与上一项分开，避免"改通知阈值"覆盖并发的"加通知邮箱"。
 	BalanceNotifyExtraEmails bool
+	// ReportPushEnabled 覆盖 report_push_enabled 列。
+	ReportPushEnabled bool
 	// AllowedGroups 为 true 时才同步 user_allowed_groups 关联表。
 	AllowedGroups bool
 	// RestrictPublicGroups 覆盖 restrict_public_groups 列。
@@ -259,6 +261,7 @@ type UpdateProfileRequest struct {
 	Concurrency            *int     `json:"concurrency"`
 	BalanceNotifyEnabled   *bool    `json:"balance_notify_enabled"`
 	BalanceNotifyThreshold *float64 `json:"balance_notify_threshold"`
+	ReportPushEnabled      *bool    `json:"report_push_enabled"`
 }
 
 type UserAvatar struct {
@@ -549,6 +552,11 @@ func (s *UserService) updateProfile(ctx context.Context, userID int64, req Updat
 			user.BalanceNotifyThreshold = req.BalanceNotifyThreshold
 		}
 		fields.BalanceNotifySettings = true
+	}
+
+	if req.ReportPushEnabled != nil {
+		user.ReportPushEnabled = *req.ReportPushEnabled
+		fields.ReportPushEnabled = true
 	}
 
 	if err := s.userRepo.Update(ctx, user, fields); err != nil {

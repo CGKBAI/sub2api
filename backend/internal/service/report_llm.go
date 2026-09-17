@@ -26,6 +26,13 @@ type ReportLLMConfig struct {
 	DailySchedule   string `json:"daily_schedule"`   // 默认 "0 20 * * *"
 	WeeklySchedule  string `json:"weekly_schedule"`  // 默认 "10 20 * * 5"
 	MonthlySchedule string `json:"monthly_schedule"` // 默认 "20 20 1 * *"（每月 1 日生成上月）
+	// 飞书推送（群自定义机器人 Webhook）
+	FeishuEnabled     bool   `json:"feishu_enabled"`
+	FeishuWebhookURL  string `json:"feishu_webhook_url"`
+	FeishuSecret      string `json:"feishu_secret"` // 可选：加签密钥
+	FeishuPushDaily   bool   `json:"feishu_push_daily"`
+	FeishuPushWeekly  bool   `json:"feishu_push_weekly"`
+	FeishuPushMonthly bool   `json:"feishu_push_monthly"`
 }
 
 func defaultReportLLMConfig() *ReportLLMConfig {
@@ -73,6 +80,8 @@ func normalizeReportLLMConfig(cfg *ReportLLMConfig) {
 	if cfg.MonthlySchedule == "" {
 		cfg.MonthlySchedule = "20 20 1 * *"
 	}
+	cfg.FeishuWebhookURL = strings.TrimSpace(cfg.FeishuWebhookURL)
+	cfg.FeishuSecret = strings.TrimSpace(cfg.FeishuSecret)
 }
 
 // GetReportConfig 读取报告配置（无配置时返回默认值）。

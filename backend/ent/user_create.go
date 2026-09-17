@@ -368,6 +368,20 @@ func (_c *UserCreate) SetNillableRpmLimit(v *int) *UserCreate {
 	return _c
 }
 
+// SetReportPushEnabled sets the "report_push_enabled" field.
+func (_c *UserCreate) SetReportPushEnabled(v bool) *UserCreate {
+	_c.mutation.SetReportPushEnabled(v)
+	return _c
+}
+
+// SetNillableReportPushEnabled sets the "report_push_enabled" field if the given value is not nil.
+func (_c *UserCreate) SetNillableReportPushEnabled(v *bool) *UserCreate {
+	if v != nil {
+		_c.SetReportPushEnabled(*v)
+	}
+	return _c
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
 func (_c *UserCreate) AddAPIKeyIDs(ids ...int64) *UserCreate {
 	_c.mutation.AddAPIKeyIDs(ids...)
@@ -674,6 +688,10 @@ func (_c *UserCreate) defaults() error {
 		v := user.DefaultRpmLimit
 		_c.mutation.SetRpmLimit(v)
 	}
+	if _, ok := _c.mutation.ReportPushEnabled(); !ok {
+		v := user.DefaultReportPushEnabled
+		_c.mutation.SetReportPushEnabled(v)
+	}
 	return nil
 }
 
@@ -765,6 +783,9 @@ func (_c *UserCreate) check() error {
 	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		return &ValidationError{Name: "rpm_limit", err: errors.New(`ent: missing required field "User.rpm_limit"`)}
+	}
+	if _, ok := _c.mutation.ReportPushEnabled(); !ok {
+		return &ValidationError{Name: "report_push_enabled", err: errors.New(`ent: missing required field "User.report_push_enabled"`)}
 	}
 	return nil
 }
@@ -892,6 +913,10 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.RpmLimit(); ok {
 		_spec.SetField(user.FieldRpmLimit, field.TypeInt, value)
 		_node.RpmLimit = value
+	}
+	if value, ok := _c.mutation.ReportPushEnabled(); ok {
+		_spec.SetField(user.FieldReportPushEnabled, field.TypeBool, value)
+		_node.ReportPushEnabled = value
 	}
 	if nodes := _c.mutation.APIKeysIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1517,6 +1542,18 @@ func (u *UserUpsert) AddRpmLimit(v int) *UserUpsert {
 	return u
 }
 
+// SetReportPushEnabled sets the "report_push_enabled" field.
+func (u *UserUpsert) SetReportPushEnabled(v bool) *UserUpsert {
+	u.Set(user.FieldReportPushEnabled, v)
+	return u
+}
+
+// UpdateReportPushEnabled sets the "report_push_enabled" field to the value that was provided on create.
+func (u *UserUpsert) UpdateReportPushEnabled() *UserUpsert {
+	u.SetExcluded(user.FieldReportPushEnabled)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -1979,6 +2016,20 @@ func (u *UserUpsertOne) AddRpmLimit(v int) *UserUpsertOne {
 func (u *UserUpsertOne) UpdateRpmLimit() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateRpmLimit()
+	})
+}
+
+// SetReportPushEnabled sets the "report_push_enabled" field.
+func (u *UserUpsertOne) SetReportPushEnabled(v bool) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetReportPushEnabled(v)
+	})
+}
+
+// UpdateReportPushEnabled sets the "report_push_enabled" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateReportPushEnabled() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateReportPushEnabled()
 	})
 }
 
@@ -2610,6 +2661,20 @@ func (u *UserUpsertBulk) AddRpmLimit(v int) *UserUpsertBulk {
 func (u *UserUpsertBulk) UpdateRpmLimit() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateRpmLimit()
+	})
+}
+
+// SetReportPushEnabled sets the "report_push_enabled" field.
+func (u *UserUpsertBulk) SetReportPushEnabled(v bool) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetReportPushEnabled(v)
+	})
+}
+
+// UpdateReportPushEnabled sets the "report_push_enabled" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateReportPushEnabled() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateReportPushEnabled()
 	})
 }
 

@@ -72,6 +72,23 @@ func (h *ReportHandler) GetByID(c *gin.Context) {
 	response.Success(c, dto.ReportFromService(item))
 }
 
+// Push handles manually pushing a report to Feishu
+// POST /api/v1/admin/reports/:id/push
+func (h *ReportHandler) Push(c *gin.Context) {
+	reportID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || reportID <= 0 {
+		response.BadRequest(c, "Invalid report ID")
+		return
+	}
+
+	item, err := h.reportService.PushReport(c.Request.Context(), reportID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.ReportFromService(item))
+}
+
 type generateReportRequest struct {
 	Type   string `json:"type" binding:"required,oneof=daily weekly monthly"`
 	UserID int64  `json:"user_id" binding:"required,gt=0"`
@@ -153,6 +170,13 @@ type updateReportConfigRequest struct {
 	DailySchedule       *string `json:"daily_schedule"`
 	WeeklySchedule      *string `json:"weekly_schedule"`
 	MonthlySchedule     *string `json:"monthly_schedule"`
+	FeishuEnabled       *bool   `json:"feishu_enabled"`
+	// FeishuWebhookURL / FeishuSecret 为空时表示保留旧值（与 api_key 同语义）
+	FeishuWebhookURL  *string `json:"feishu_webhook_url"`
+	FeishuSecret      *string `json:"feishu_secret"`
+	FeishuPushDaily   *bool   `json:"feishu_push_daily"`
+	FeishuPushWeekly  *bool   `json:"feishu_push_weekly"`
+	FeishuPushMonthly *bool   `json:"feishu_push_monthly"`
 }
 
 // UpdateConfig handles updating report LLM config
@@ -197,6 +221,24 @@ func (h *ReportHandler) UpdateConfig(c *gin.Context) {
 	if req.MonthlySchedule != nil {
 		cfg.MonthlySchedule = *req.MonthlySchedule
 	}
+	if req.FeishuEnabled != nil {
+		cfg.FeishuEnabled = *req.FeishuEnabled
+	}
+	if req.FeishuWebhookURL != nil && *req.FeishuWebhookURL != "" {
+		cfg.FeishuWebhookURL = *req.FeishuWebhookURL
+	}
+	if req.FeishuSecret != nil && *req.FeishuSecret != "" {
+		cfg.FeishuSecret = *req.FeishuSecret
+	}
+	if req.FeishuPushDaily != nil {
+		cfg.FeishuPushDaily = *req.FeishuPushDaily
+	}
+	if req.FeishuPushWeekly != nil {
+		cfg.FeishuPushWeekly = *req.FeishuPushWeekly
+	}
+	if req.FeishuPushMonthly != nil {
+		cfg.FeishuPushMonthly = *req.FeishuPushMonthly
+	}
 
 	updated, err := h.reportService.UpdateReportConfig(c.Request.Context(), cfg)
 	if err != nil {
@@ -206,7 +248,7 @@ func (h *ReportHandler) UpdateConfig(c *gin.Context) {
 	response.Success(c, redactReportConfig(updated))
 }
 
-// redactReportConfig 返回给前端时隐藏 API Key。
+// redactReportConfig 返回给前端时隐藏 API Key 与飞书 webhook/加签密钥。
 func redactReportConfig(cfg *service.ReportLLMConfig) *service.ReportLLMConfig {
 	if cfg == nil {
 		return nil
@@ -214,6 +256,12 @@ func redactReportConfig(cfg *service.ReportLLMConfig) *service.ReportLLMConfig {
 	out := *cfg
 	if out.APIKey != "" {
 		out.APIKey = "********"
+	}
+	if out.FeishuWebhookURL != "" {
+		out.FeishuWebhookURL = "********"
+	}
+	if out.FeishuSecret != "" {
+		out.FeishuSecret = "********"
 	}
 	return &out
 }

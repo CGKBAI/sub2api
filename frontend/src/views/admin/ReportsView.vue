@@ -23,6 +23,19 @@ const pageSize = 50
 
 const generatingAll = ref(false)
 const generatingUserId = ref<number | null>(null)
+const pushingReportId = ref<number | null>(null)
+
+async function pushToFeishu(report: Report) {
+  pushingReportId.value = report.id
+  try {
+    await reportsAPI.pushToFeishu(report.id)
+    appStore.showSuccess(t('admin.reports.actions.pushSuccess'))
+  } catch (error: any) {
+    appStore.showError(error?.message || String(error))
+  } finally {
+    pushingReportId.value = null
+  }
+}
 
 function todayStr(): string {
   const d = new Date()
@@ -117,7 +130,13 @@ const configForm = ref<ReportLLMConfig & { api_key: string }>({
   prompt_truncate_chars: 500,
   daily_schedule: '0 20 * * *',
   weekly_schedule: '10 20 * * 5',
-  monthly_schedule: '20 20 1 * *'
+  monthly_schedule: '20 20 1 * *',
+  feishu_enabled: false,
+  feishu_webhook_url: '',
+  feishu_secret: '',
+  feishu_push_daily: true,
+  feishu_push_weekly: true,
+  feishu_push_monthly: true
 })
 
 async function openSettings() {
@@ -135,6 +154,8 @@ async function saveConfig() {
   try {
     const payload: Record<string, unknown> = { ...configForm.value }
     if (!configForm.value.api_key) delete payload.api_key
+    if (!configForm.value.feishu_webhook_url) delete payload.feishu_webhook_url
+    if (!configForm.value.feishu_secret) delete payload.feishu_secret
     await reportsAPI.updateConfig(payload as never)
     appStore.showSuccess(t('admin.reports.config.saved'))
     settingsOpen.value = false
@@ -247,19 +268,28 @@ const statusBadge = computed(() => (status: string) => {
               {{ periodLabel(report) }}
             </div>
           </div>
-          <button
-            class="btn btn-secondary px-3 py-1 text-xs"
-            :disabled="generatingUserId === report.user_id"
-            @click="generateFor(report)"
-          >
-            {{
-              generatingUserId === report.user_id
-                ? t('admin.reports.actions.generating')
-                : report.status === 'failed'
-                  ? t('admin.reports.actions.retry')
-                  : t('admin.reports.actions.generateFor')
-            }}
-          </button>
+          <div class="flex shrink-0 gap-2">
+            <button
+              class="btn btn-secondary px-3 py-1 text-xs"
+              :disabled="pushingReportId === report.id"
+              @click="pushToFeishu(report)"
+            >
+              {{ pushingReportId === report.id ? t('admin.reports.actions.pushing') : t('admin.reports.actions.push') }}
+            </button>
+            <button
+              class="btn btn-secondary px-3 py-1 text-xs"
+              :disabled="generatingUserId === report.user_id"
+              @click="generateFor(report)"
+            >
+              {{
+                generatingUserId === report.user_id
+                  ? t('admin.reports.actions.generating')
+                  : report.status === 'failed'
+                    ? t('admin.reports.actions.retry')
+                    : t('admin.reports.actions.generateFor')
+              }}
+            </button>
+          </div>
         </div>
 
         <!-- 统计行 -->
@@ -366,6 +396,47 @@ const statusBadge = computed(() => (status: string) => {
           <div>
             <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.config.monthlySchedule') }}</label>
             <input v-model="configForm.monthly_schedule" type="text" :class="inputClass" />
+          </div>
+        </div>
+
+        <!-- 飞书推送 -->
+        <div class="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+          <div class="text-sm font-medium text-gray-900 dark:text-white">
+            {{ t('admin.reports.config.feishuSection') }}
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.reports.config.feishuDescription') }}
+          </p>
+          <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+            <input v-model="configForm.feishu_enabled" type="checkbox" class="checkbox" />
+            {{ t('admin.reports.config.feishuEnabled') }}
+          </label>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+              <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.config.feishuWebhook') }}</label>
+              <input v-model="configForm.feishu_webhook_url" type="password" :class="inputClass" :placeholder="t('admin.reports.config.feishuWebhookPlaceholder')" autocomplete="new-password" />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.config.feishuSecret') }}</label>
+              <input v-model="configForm.feishu_secret" type="password" :class="inputClass" :placeholder="t('admin.reports.config.feishuSecretPlaceholder')" autocomplete="new-password" />
+            </div>
+          </div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.reports.config.feishuPushTypes') }}
+          </div>
+          <div class="flex flex-wrap gap-4 text-sm text-gray-700 dark:text-gray-200">
+            <label class="flex items-center gap-2">
+              <input v-model="configForm.feishu_push_daily" type="checkbox" class="checkbox" />
+              {{ t('admin.reports.config.feishuPushDaily') }}
+            </label>
+            <label class="flex items-center gap-2">
+              <input v-model="configForm.feishu_push_weekly" type="checkbox" class="checkbox" />
+              {{ t('admin.reports.config.feishuPushWeekly') }}
+            </label>
+            <label class="flex items-center gap-2">
+              <input v-model="configForm.feishu_push_monthly" type="checkbox" class="checkbox" />
+              {{ t('admin.reports.config.feishuPushMonthly') }}
+            </label>
           </div>
         </div>
         <div class="flex justify-end gap-2 pt-2">

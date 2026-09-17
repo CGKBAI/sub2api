@@ -26,5 +26,10 @@ export async function listMyReports(
   return data
 }
 
-const userReportsAPI = { listMyReports }
+export async function pushMyReportToFeishu(id: number): Promise<Report> {
+  const { data } = await apiClient.post<Report>(`/user/reports/${id}/push`)
+  return data
+}
+
+const userReportsAPI = { listMyReports, pushMyReportToFeishu }
 export default userReportsAPI

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
@@ -70,4 +71,27 @@ func (h *UserReportHandler) List(c *gin.Context) {
 		out = append(out, *dto.ReportFromService(&items[i]))
 	}
 	response.Paginated(c, out, paginationResult.Total, page, pageSize)
+}
+
+// Push 手动推送自己的报告到飞书群
+// POST /api/v1/user/reports/:id/push
+func (h *UserReportHandler) Push(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
+
+	reportID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || reportID <= 0 {
+		response.BadRequest(c, "Invalid report ID")
+		return
+	}
+
+	item, err := h.reportService.PushUserReport(c.Request.Context(), subject.UserID, reportID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.ReportFromService(item))
 }

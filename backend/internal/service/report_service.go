@@ -37,6 +37,7 @@ type ReportService struct {
 	reportRepo  ReportRepository
 	settingRepo SettingRepository
 	llm         *reportLLMClient
+	feishu      *reportFeishuClient
 }
 
 // NewReportService 构造报告服务。
@@ -46,6 +47,9 @@ func NewReportService(reportRepo ReportRepository, settingRepo SettingRepository
 		settingRepo: settingRepo,
 		llm: &reportLLMClient{
 			httpClient: &http.Client{Timeout: reportLLMTimeout + 10*time.Second},
+		},
+		feishu: &reportFeishuClient{
+			httpClient: &http.Client{Timeout: reportFeishuPushTimeout + 5*time.Second},
 		},
 	}
 }
@@ -137,7 +141,97 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 	report.AISummary = summary
 	report.Error = ""
 	report.Stats = stats
-	return s.persist(ctx, report)
+	saved, err := s.persist(ctx, report)
+	if err != nil {
+		return nil, err
+	}
+	s.maybeAutoPushFeishu(ctx, cfg, saved)
+	return saved, nil
+}
+
+// maybeAutoPushFeishu 生成成功后的飞书自动推送（best-effort：失败仅记日志，不影响生成结果）。
+// 生效条件：feishu_enabled + 对应类型推送开关 + webhook 已配置 + 用户参与推送（users.report_push_enabled）。
+func (s *ReportService) maybeAutoPushFeishu(ctx context.Context, cfg *ReportLLMConfig, report *Report) {
+	if s == nil || s.feishu == nil || report == nil || report.Status != domain.ReportStatusDone {
+		return
+	}
+	if cfg == nil || !cfg.FeishuEnabled || strings.TrimSpace(cfg.FeishuWebhookURL) == "" {
+		return
+	}
+	switch report.Type {
+	case domain.ReportTypeDaily:
+		if !cfg.FeishuPushDaily {
+			return
+		}
+	case domain.ReportTypeWeekly:
+		if !cfg.FeishuPushWeekly {
+			return
+		}
+	case domain.ReportTypeMonthly:
+		if !cfg.FeishuPushMonthly {
+			return
+		}
+	default:
+		return
+	}
+	optIn, err := s.reportRepo.IsReportPushEnabled(ctx, report.UserID)
+	if err != nil {
+		logger.LegacyPrintf("service.report", "[ReportFeishu] check push opt-in for user %d: %v", report.UserID, err)
+		return
+	}
+	if !optIn {
+		return
+	}
+	pushCtx, cancel := context.WithTimeout(ctx, reportFeishuPushTimeout)
+	defer cancel()
+	if err := s.feishu.PushReportCard(pushCtx, cfg, report); err != nil {
+		logger.LegacyPrintf("service.report", "[ReportFeishu] auto push %s report %d to feishu: %v", report.Type, report.ID, err)
+	}
+}
+
+// pushReportWithConfig 手动推送单篇报告（独立 10s 超时）。
+func (s *ReportService) pushReportWithConfig(ctx context.Context, report *Report) error {
+	cfg, err := s.GetReportConfig(ctx)
+	if err != nil {
+		return err
+	}
+	pushCtx, cancel := context.WithTimeout(ctx, reportFeishuPushTimeout)
+	defer cancel()
+	return s.feishu.PushReportCard(pushCtx, cfg, report)
+}
+
+// PushReport 手动推送指定报告到飞书（管理端按钮）。
+// 与自动推送不同：不检查类型开关与用户参与开关，只要求 webhook 已配置。
+func (s *ReportService) PushReport(ctx context.Context, reportID int64) (*Report, error) {
+	if s == nil || s.reportRepo == nil {
+		return nil, errors.New("report repository not initialized")
+	}
+	report, err := s.GetReport(ctx, reportID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.pushReportWithConfig(ctx, report); err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
+// PushUserReport 用户侧手动推送：只能推自己的报告（无权限时按不存在处理）。
+func (s *ReportService) PushUserReport(ctx context.Context, userID, reportID int64) (*Report, error) {
+	if userID <= 0 {
+		return nil, errors.New("invalid user id")
+	}
+	report, err := s.GetReport(ctx, reportID)
+	if err != nil {
+		return nil, err
+	}
+	if report.UserID != userID {
+		return nil, domain.ErrReportNotFound
+	}
+	if err := s.pushReportWithConfig(ctx, report); err != nil {
+		return nil, err
+	}
+	return report, nil
 }
 
 // GenerateForAllUsers 为周期内所有活跃用户生成报告（scheduler / 管理端手动触发用）。

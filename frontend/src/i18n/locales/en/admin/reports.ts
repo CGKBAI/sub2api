@@ -15,7 +15,12 @@ export default {
       generating: 'Generating…',
       generateFor: 'Generate for this user',
       retry: 'Retry',
-      settings: 'AI Summary Settings'
+      settings: 'AI Summary Settings',
+      push: 'Send to Feishu',
+      pushing: 'Sending…',
+      pushSuccess: 'Pushed to Feishu group',
+      autoPush: 'Join Feishu auto push',
+      autoPushHint: 'When off, generated reports are not pushed automatically; manual push is still available'
     },
     stats: {
       requests: 'Requests',
@@ -44,6 +49,18 @@ export default {
       dailySchedule: 'Daily cron (min hour dom mon dow)',
       weeklySchedule: 'Weekly cron (min hour dom mon dow)',
       monthlySchedule: 'Monthly cron (1st of month, previous month)',
+      feishuSection: 'Feishu Push',
+      feishuDescription:
+        'Push report cards to a Feishu group via custom bot webhook. Get one in Feishu: group settings → bots → add custom bot.',
+      feishuEnabled: 'Enable Feishu push',
+      feishuWebhook: 'Webhook URL',
+      feishuWebhookPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/…, leave empty to keep unchanged',
+      feishuSecret: 'Signing secret (optional)',
+      feishuSecretPlaceholder: 'Leave empty to keep unchanged',
+      feishuPushTypes: 'Auto push types',
+      feishuPushDaily: 'Daily',
+      feishuPushWeekly: 'Weekly',
+      feishuPushMonthly: 'Monthly',
       save: 'Save',
       cancel: 'Cancel',
       saved: 'Saved'
