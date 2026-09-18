@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-18（**v3.3 已上线生产 stable 33333**：批量生成"为所有活跃用户"修复 Network error——前端超时覆盖 + 后端批量脱离请求 context；v3.2 报告页布局修复，见 §8）。
+> 本文档是完整项目上下文。最后更新：2026-09-18（**v3.4 已上线生产 stable 33333**：飞书自动推送默认关闭 + 管理员用户列表逐行开关、用户仍可自行双向切换；v3.3 批量生成 Network error 修复，见 §8）。
 
 ## 1. 功能与当前状态总览
 
@@ -168,6 +168,18 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 - [x] 验证：go build/vet（golang:1.27 容器）+ report 相关单测全绿；tsc 隔离检查 0 错误；buildx dev 镜像 → 33336 冒烟（healthy/HTTP 200/无 panic；admin chunk 含 `generate-all…{timeout:30*60*1e3}`、`generate…{timeout:3*60*1e3}`）→ 用户浏览器实测批量生成通过
 - [x] stable 33333 发布（healthy、HTTP 200、index hash 与 dev 一致）→ commit + push fork
 - 备注：构建时 alpine CDN（dl-cdn）TLS 间歇故障，临时用 sed 切 aliyun 源构建后已还原 Dockerfile；如复发可考虑固化镜像源
+
+### v3.4：飞书推送默认关闭 + 管理员逐行开关（2026-09-18 已上线）
+
+> 背景：飞书自动推送默认参与（迁移 235 DEFAULT true）对用户造成噪音。v3.4 决策：①默认改为不参与，存量全部回填 false；②管理员在用户管理列表逐行开关；③管理员设置后用户仍可在报告页自行双向切换。手动"发送到飞书"按钮不受开关限制（语义不变）。
+
+- [x] `migrations/236_user_report_push_default_off.sql`：`SET DEFAULT false` + 回填 `UPDATE users SET report_push_enabled=false WHERE true`（纯增量兼容，33336 启动已验证：列默认 false、15 用户 0 true）
+- [x] `ent/schema/user.go`：`Default(false)` → 容器 `go generate ./ent`（生成物 migrate/schema.go Default:false）
+- [x] 后端 admin 链路（仿 `RestrictPublicGroups` 的 `*bool` 范式）：`admin/user_handler.go` UpdateUserRequest + 透传；`admin_service.go` UpdateUserInput；`admin_user.go` UpdateUser field-mask 块（repo 管道 v3.1 已有，零改动）
+- [x] 前端：`UpdateUserRequest` 加 `report_push_enabled?`；`UsersView.vue` 新增隐藏列 `report_push`（列设置版本 bump 到 4，`#cell-report_push` checkbox 仿用户页样式，`handleToggleReportPush` 乐观 toast + loadUsers）；user `ReportsView.vue` fallback `?? true`→`?? false`；i18n zh/en（columns.reportPush、reportPushHint/On/Off、failedToTogglePush）
+- [x] 验证：go build/vet/test 全绿 + vue-tsc 全量 EXIT=0（frontend 拷贝至 /tmp 绕开 root node_modules 后 pnpm@9 安装）→ buildx dev → 33336 冒烟（迁移生效、chunk 含 report_push_enabled/reportPushHint、无 panic）→ 用户实测（管理员列开关 ↔ 用户页双向切换）
+- [x] stable 33333 发布（healthy、HTTP 200、index hash Cm7z44b8 与 dev 一致；DB 1/15 true = 测试时管理员打开的用户）→ commit + push fork
+- 基建：Dockerfile 固化 aliyun apk 镜像源（dl-cdn TLS 二次复现，与 GOPROXY=goproxy.cn 同理，注释已写明）；另 vue-tsc 全量检查方法：`rsync frontend → /tmp 排除 node_modules → corepack pnpm@9 install --frozen-lockfile → node_modules/.bin/vue-tsc --noEmit`
 
 ### 后续迭代
 
