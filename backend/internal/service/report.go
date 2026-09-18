@@ -80,6 +80,15 @@ type ReportGenerateResult struct {
 	Err    error
 }
 
+// ReportTrigger 标记报告生成来源：定时生成可按开关自动推飞书；
+// 手动生成永不自动推，只在 web 展示，由卡片按钮手动推送。
+type ReportTrigger string
+
+const (
+	ReportTriggerManual    ReportTrigger = "manual"    // 管理端/用户手动生成
+	ReportTriggerScheduled ReportTrigger = "scheduled" // 定时任务生成
+)
+
 var (
 	ErrReportGenerateUserNotFound = infraerrors.BadRequest("REPORT_USER_NOT_FOUND", "no usage found for this user in the period")
 )

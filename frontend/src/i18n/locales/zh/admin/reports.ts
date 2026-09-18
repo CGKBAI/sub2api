@@ -5,6 +5,8 @@ export default {
     tabs: { daily: '日报', weekly: '周报', monthly: '月报' },
     filters: {
       date: '日期',
+      week: '周',
+      month: '月份',
       user: '用户 ID',
       userPlaceholder: '按用户 ID 筛选',
       refresh: '刷新'
@@ -19,7 +21,7 @@ export default {
       pushing: '发送中…',
       pushSuccess: '已推送到飞书群',
       autoPush: '参与飞书自动推送',
-      autoPushHint: '关闭后报告生成不再自动推送到飞书群，仍可手动发送'
+      autoPushHint: '仅作用于定时生成的报告（每天 20:00 日报、周五周报、每月 1 日月报）；手动生成的报告不自动推送，可点卡片按钮手动发送'
     },
     stats: {
       requests: '请求',
@@ -55,7 +57,7 @@ export default {
       feishuWebhookPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/…，留空表示不修改',
       feishuSecret: '加签密钥（可选）',
       feishuSecretPlaceholder: '留空表示不修改',
-      feishuPushTypes: '自动推送类型',
+      feishuPushTypes: '自动推送类型（仅定时生成）',
       feishuPushDaily: '日报',
       feishuPushWeekly: '周报',
       feishuPushMonthly: '月报',

@@ -55,29 +55,31 @@ func NewReportService(reportRepo ReportRepository, settingRepo SettingRepository
 }
 
 // ReportPeriod 根据报告类型与基准时间计算周期边界 [start, end)。
-// 周报为「周六起点周」[上周六 00:00, 本周六 00:00)：周五晚定时生成时覆盖前 7 个
-// 完整自然日，手动生成语义一致（ref 在周内任意时刻 → 该周六~周五报告）。
-// 月报固定覆盖 ref 的上一个自然月：每月 1 日定时生成上月，手动生成语义一致
-//（如 ref 在 9 月任意一天 → 生成 8 月月报，8 月月报用 9 月任意日期可重试）。
+// 周报为正常自然周 [本周一 00:00, 下周一 00:00)：周五 20:10 定时生成覆盖周一~周五
+//（默认周末不干活）；周末有工作 → 之后手动重生成自动补入周六日（会再次自动推飞书），
+// 手动生成语义一致（ref 在周内任意时刻 → 该周一~周日报告）。
+// 月报覆盖 ref 所在自然月（选 8 月任意日期 → 生成 8 月月报）；调度器每月 1 日 20:20
+// 生成上月：ref 由 scheduler 传上月 1 日，手动/定时语义一致。
 func ReportPeriod(reportType string, ref time.Time) (time.Time, time.Time, error) {
 	switch reportType {
 	case domain.ReportTypeDaily:
 		start := timezone.StartOfDay(ref)
 		return start, start.Add(24 * time.Hour), nil
 	case domain.ReportTypeWeekly:
-		start := timezone.StartOfWeekSaturday(ref)
+		start := timezone.StartOfWeek(ref)
 		return start, start.Add(7 * 24 * time.Hour), nil
 	case domain.ReportTypeMonthly:
-		end := timezone.StartOfMonth(ref)
-		return end.AddDate(0, -1, 0), end, nil
+		start := timezone.StartOfMonth(ref)
+		return start, start.AddDate(0, 1, 0), nil
 	default:
 		return time.Time{}, time.Time{}, domain.ErrReportInvalidType
 	}
 }
 
 // GenerateReport 为单个用户生成指定周期（日/周/月）的报告。
-// 已存在同周期报告时覆盖更新（手动重试语义）。
-func (s *ReportService) GenerateReport(ctx context.Context, userID int64, reportType string, ref time.Time) (*Report, error) {
+// trigger 区分生成来源：manual（管理端/用户手动）永不自动推飞书；
+// scheduled（定时任务）按开关自动推。已存在同周期报告时覆盖更新（手动重试语义）。
+func (s *ReportService) GenerateReport(ctx context.Context, userID int64, reportType string, ref time.Time, trigger ReportTrigger) (*Report, error) {
 	if s == nil || s.reportRepo == nil {
 		return nil, errors.New("report repository not initialized")
 	}
@@ -145,11 +147,15 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 	if err != nil {
 		return nil, err
 	}
-	s.maybeAutoPushFeishu(ctx, cfg, saved)
+	// 仅定时生成自动推飞书；手动生成只在 web 展示，由卡片按钮手动推送
+	if trigger == ReportTriggerScheduled {
+		s.maybeAutoPushFeishu(ctx, cfg, saved)
+	}
 	return saved, nil
 }
 
-// maybeAutoPushFeishu 生成成功后的飞书自动推送（best-effort：失败仅记日志，不影响生成结果）。
+// maybeAutoPushFeishu 定时生成成功后的飞书自动推送（手动生成不经过此路径）
+// （best-effort：失败仅记日志，不影响生成结果）。
 // 生效条件：feishu_enabled + 对应类型推送开关 + webhook 已配置 + 用户参与推送（users.report_push_enabled）。
 func (s *ReportService) maybeAutoPushFeishu(ctx context.Context, cfg *ReportLLMConfig, report *Report) {
 	if s == nil || s.feishu == nil || report == nil || report.Status != domain.ReportStatusDone {
@@ -235,8 +241,8 @@ func (s *ReportService) PushUserReport(ctx context.Context, userID, reportID int
 }
 
 // GenerateForAllUsers 为周期内所有活跃用户生成报告（scheduler / 管理端手动触发用）。
-// 返回成功生成的数量与首个错误。
-func (s *ReportService) GenerateForAllUsers(ctx context.Context, reportType string, ref time.Time) (int, error) {
+// trigger 语义同 GenerateReport。返回成功生成的数量与首个错误。
+func (s *ReportService) GenerateForAllUsers(ctx context.Context, reportType string, ref time.Time, trigger ReportTrigger) (int, error) {
 	if s == nil || s.reportRepo == nil {
 		return 0, errors.New("report repository not initialized")
 	}
@@ -253,7 +259,7 @@ func (s *ReportService) GenerateForAllUsers(ctx context.Context, reportType stri
 	generated := 0
 	var firstErr error
 	for _, uid := range userIDs {
-		_, gErr := s.GenerateReport(ctx, uid, reportType, ref)
+		_, gErr := s.GenerateReport(ctx, uid, reportType, ref, trigger)
 		if gErr != nil {
 			if errors.Is(gErr, ErrReportGenerateUserNotFound) {
 				continue

@@ -116,7 +116,7 @@ func (h *ReportHandler) Generate(c *gin.Context) {
 		return
 	}
 
-	item, err := h.reportService.GenerateReport(c.Request.Context(), req.UserID, req.Type, ref)
+	item, err := h.reportService.GenerateReport(c.Request.Context(), req.UserID, req.Type, ref, service.ReportTriggerManual)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -138,7 +138,7 @@ func (h *ReportHandler) GenerateAll(c *gin.Context) {
 		return
 	}
 
-	generated, firstErr := h.reportService.GenerateForAllUsers(c.Request.Context(), req.Type, ref)
+	generated, firstErr := h.reportService.GenerateForAllUsers(c.Request.Context(), req.Type, ref, service.ReportTriggerManual)
 	if generated == 0 && firstErr != nil {
 		response.ErrorFrom(c, firstErr)
 		return

@@ -6,6 +6,8 @@ export default {
     tabs: { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' },
     filters: {
       date: 'Date',
+      week: 'Week',
+      month: 'Month',
       user: 'User ID',
       userPlaceholder: 'Filter by user ID',
       refresh: 'Refresh'
@@ -20,7 +22,7 @@ export default {
       pushing: 'Sending…',
       pushSuccess: 'Pushed to Feishu group',
       autoPush: 'Join Feishu auto push',
-      autoPushHint: 'When off, generated reports are not pushed automatically; manual push is still available'
+      autoPushHint: 'Applies only to scheduled reports (daily 20:00, weekly Fri, monthly on the 1st); manually generated reports are never auto-pushed — use the card button to send'
     },
     stats: {
       requests: 'Requests',
@@ -57,7 +59,7 @@ export default {
       feishuWebhookPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/…, leave empty to keep unchanged',
       feishuSecret: 'Signing secret (optional)',
       feishuSecretPlaceholder: 'Leave empty to keep unchanged',
-      feishuPushTypes: 'Auto push types',
+      feishuPushTypes: 'Auto push types (scheduled reports only)',
       feishuPushDaily: 'Daily',
       feishuPushWeekly: 'Weekly',
       feishuPushMonthly: 'Monthly',

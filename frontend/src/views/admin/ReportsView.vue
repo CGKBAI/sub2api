@@ -13,13 +13,41 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const activeTab = ref<ReportType>('daily')
-const date = ref(todayStr())
+const dailyDate = ref(todayStr())
 const userIdFilter = ref('')
 const loading = ref(false)
 const reports = ref<Report[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = 50
+
+// 周报按周选（近 12 周，value=周一日期）；月报按月选（value=该月 1 日）
+const weekOptions = (() => {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const fmt = (d: Date) => `${pad(d.getMonth() + 1)}.${pad(d.getDate())}`
+  const day = new Date().getDay()
+  const monday = new Date()
+  monday.setDate(monday.getDate() - (day === 0 ? 6 : day - 1))
+  const out: { value: string; label: string }[] = []
+  for (let i = 0; i < 12; i++) {
+    const start = new Date(monday)
+    start.setDate(monday.getDate() - 7 * i)
+    const end = new Date(start)
+    end.setDate(start.getDate() + 6)
+    out.push({
+      value: `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`,
+      label: `${fmt(start)} ~ ${fmt(end)}`
+    })
+  }
+  return out
+})()
+const weeklyDate = ref(weekOptions[0]?.value ?? todayStr())
+const monthlyDate = ref(todayStr().slice(0, 7))
+const activeDate = computed(() => {
+  if (activeTab.value === 'weekly') return weeklyDate.value
+  if (activeTab.value === 'monthly') return monthlyDate.value ? `${monthlyDate.value}-01` : ''
+  return dailyDate.value
+})
 
 const generatingAll = ref(false)
 const generatingUserId = ref<number | null>(null)
@@ -47,7 +75,7 @@ async function load() {
   loading.value = true
   try {
     const filters: Record<string, string | number> = { type: activeTab.value }
-    if (date.value) filters.date = date.value
+    if (activeDate.value) filters.date = activeDate.value
     const uid = Number(userIdFilter.value)
     if (userIdFilter.value && uid > 0) filters.user_id = uid
     const res = await reportsAPI.list(page.value, pageSize, filters as never)
@@ -61,7 +89,7 @@ async function load() {
   }
 }
 
-watch([activeTab, date, userIdFilter], () => {
+watch([activeTab, dailyDate, weeklyDate, monthlyDate, userIdFilter], () => {
   page.value = 1
   load()
 })
@@ -73,7 +101,7 @@ async function generateAll() {
   try {
     const res = await reportsAPI.generateAll({
       type: activeTab.value,
-      date: date.value || undefined
+      date: activeDate.value || undefined
     })
     appStore.showSuccess(`${res.generated}`)
     await load()
@@ -90,7 +118,7 @@ async function generateFor(report: Report) {
     await reportsAPI.generate({
       type: activeTab.value,
       user_id: report.user_id,
-      date: date.value || undefined
+      date: activeDate.value || undefined
     })
     await load()
   } catch (error: any) {
@@ -233,9 +261,19 @@ const statusBadge = computed(() => (status: string) => {
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <label class="text-sm text-gray-500 dark:text-gray-400">
-          {{ t('admin.reports.filters.date') }}
+          {{
+            activeTab === 'weekly'
+              ? t('admin.reports.filters.week')
+              : activeTab === 'monthly'
+                ? t('admin.reports.filters.month')
+                : t('admin.reports.filters.date')
+          }}
         </label>
-        <input v-model="date" type="date" class="input text-sm" />
+        <input v-if="activeTab === 'daily'" v-model="dailyDate" type="date" class="input text-sm" />
+        <select v-else-if="activeTab === 'weekly'" v-model="weeklyDate" class="input text-sm">
+          <option v-for="w in weekOptions" :key="w.value" :value="w.value">{{ w.label }}</option>
+        </select>
+        <input v-else v-model="monthlyDate" type="month" class="input text-sm" />
         <input
           v-model="userIdFilter"
           type="text"

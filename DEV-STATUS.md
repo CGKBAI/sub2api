@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-16 晚（**报告链路 v2 已实施代码**：日报素材按 session 分组、周报周期改为上周六~本周五纯日报聚合、月报聚合交集周报；单测+真实库 SQL 验证+33336 启动冒烟通过，待网页验证后发 stable，见 §8）。
+> 本文档是完整项目上下文。最后更新：2026-09-17 晚（**v3 + v3.1 已上线生产 stable 33333**：周期回归周一~周日、月报反转为 ref 所在月、前端周/月选择器、手动生成不自动推飞书仅定时推；session 分组素材保留，见 §8）。
 
 ## 1. 功能与当前状态总览
 
@@ -9,12 +9,12 @@
 1. ✅ **Prompt 存储**（核心，已完成）：异步审计落库 `prompt_audit_events`，**扫描失败也必存**（降级落库）
 2. ✅ **fork 改造**：Web 界面（admin 看所有人 / user 看自己）、定时生成、手动生成、LLM 设置页
 3. ✅ **已上线生产**（33333，`sub2api:stable`）
-4. ✅ **月报类型**（2026-09-16）：迁移 233 放宽 CHECK；月报固定覆盖 ref 的**上一个自然月**（每月 1 日 20:20 生成上月，手动生成语义一致）；聚合优先级：当月周报 → 当月日报 → prompt 片段
+4. ✅ **月报类型**（2026-09-16）：迁移 233 放宽 CHECK；月报固定覆盖 ref 的**上一个自然月**（每月 1 日 20:20 生成上月，手动生成语义一致）——v3 将反转为 ref 所在自然月，见 §8；聚合优先级：当月周报 → 当月日报 → prompt 片段
 5. ✅ **LLM 总结 prompt 重写 ×2**（2026-09-16）：最终格式对齐团队模板——**标题由后端拼**（`reportTitle()`，姓名取 users.username，如 `# 工作日报（2026-09-15）- 谢翔宇`），LLM 只输出两个小节（`## 一、今日/本周/本月核心工作` + `## 二、明日/下周/下月工作计划`，平铺编号条目，无分类/优先级标注）；素材规则保留噪音过滤/合并同类/量化/脱敏；`ReportRepository.GetUsername()` 新增
 6. ✅ **报告素材双通道**（2026-09-16 晚）：①`FetchUserTurns` 逐请求头部提取用户真实输入（剥 <system-reminder> 前缀+噪音过滤+去重）——普通聊天/Claude Code 客户端有效；②`FetchPromptSnapshots`+对话区窗口采样（锚点 `</available_skills>` 后，每 session 最全快照×均分窗口×700 字）——opencode 等智能体客户端用户输入埋在历史深处、且 reminder 字符串会出现在系统提示词讲解和文件内容里导致正则剥离不可靠，只能靠窗口采样。system prompt 含 ❌/✅ 反例（禁止'用了什么工具/模式/多少请求'类条目）。验证：谢翔宇 9/16 预览输出已为真实工作条目。**已知限制**：单 session 超 64k 时审计截断丢最新几轮（仅保头部，opencode 客户端压缩可部分缓解）；快照均匀选取未按 session 分组的限制已由 v2 解决（见第 8 项）
 7. ✅ **审计表 session 维度**（2026-09-16 晚）：迁移 234 给 prompt_audit_jobs/events 加 session_id（取自请求头 `ExtractClientSessionID` 单一入口），部分索引 (user_id, session_id, created_at)；Request→job→event 全链路穿透。注意：session_id 与 usage_logs 同源（客户端上报），历史数据为空
-8. 🚧 **报告链路 v2**（2026-09-16 晚）：①日报素材按 session 分组总结（`FetchPromptSnapshots` 重写，session_id 自 9/16 17:54 起入库）；②周报周期从周一~周日改为**上周六~本周五**（`timezone.StartOfWeekSaturday()`，周五 20:10 生成，纯日报聚合，某天日报缺失直接跳过、不回填 prompt）；③月报聚合与上月有交集的周报（跨月周进两个月报）。代码+单测已完成（commit 见 git log），dev 33336 已部署，**待网页验证后发 stable**
-9. ⏸ **飞书推送**：暂缓
+8. ✅ **报告链路 v2+v3**（2026-09-16/17，v3 已上线 stable）：①日报素材按 session 分组总结（`FetchPromptSnapshots`，session_id 自 9/16 17:54 起入库）——上线保留；②周报周期=**正常周一~周日**（v2 的周六周期已回滚，`StartOfWeekSaturday` 已删除），周五 20:10 定时生成覆盖周一~周五、周末工作后续手动重生成补入；③月报=**ref 所在自然月**（前端选 8 月出 8 月；调度器 1 日传上月 1 日生成上月）；④前端周报按周下拉选（近 12 周）、月报按月选（admin/user 双视图）；⑤**手动生成永不自动推飞书**（v3.1，`ReportTrigger` manual/scheduled），定时生成按类型开关+用户参与开关自动推；⑥月报聚合与当月有交集的周报（pageSize 8）
+9. ✅ **飞书推送**（2026-09-17 已上线生产）：群自定义机器人 Webhook + interactive 卡片；生成成功自动推（类型开关+用户开关）+ 手动按钮（本人/admin）；commit 7c3f80740，见 §10
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -33,7 +33,7 @@
 
 - `origin` = 官方 `https://github.com/Wei-Shaw/sub2api`（只 fetch，不 push）
 - 本仓库改动全部在分支 **`feature/daily-weekly-reports`**（基于 v0.1.184），首个 commit：`feat: add daily/weekly user reports with prompt audit persistence`
-- 项目状态文档同步提交在 `docs/DEV-STATUS.md`（每次重要变更后更新并 commit）
+- 项目状态文档同步提交在 `DEV-STATUS.md`（仓库根目录，与 `/home/xxy/fs/PLAN.md` 内容保持一致，每次重要变更后更新并 commit）
 - **注意**：`frontend/.pnpm-store/` 是容器装依赖的产物，已加 .gitignore，勿提交
 
 **跟官方更新**（官方出新版时）：
@@ -68,6 +68,7 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 **纪律**：
 - 改 ent schema / wire 后先 `docker run --rm -v /home/xxy/fs/sub2api/backend:/app -w /app -e GOFLAGS=-buildvcs=false golang:1.27.0-alpine sh -c "apk add --no-cache git >/dev/null 2>&1 && go get github.com/google/wire/cmd/wire@v0.7.0 >/dev/null 2>&1 && make generate"`，生成物提交仓库
 - 编译验证**不要用管道吃退出码**：`go build ./... > /log 2>&1; echo $?`
+- **前端容器操作必须钉 pnpm@9**（`corepack prepare pnpm@9 --activate`，与 Dockerfile 一致）：corepack 默认的 pnpm v10 会重写 pnpm-lock.yaml、生成 pnpm-workspace.yaml、禁用 build scripts，导致镜像构建（--frozen-lockfile）失败
 - **新迁移必须纯增量**（只建新表/加可空列）：dev 启动会在共享库跑迁移，stable 共存
 - 审计 worker 双实例都消费队列（都有"必存"修复，无丢失风险）
 
@@ -106,52 +107,60 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 2. `prompt_worker.go`：**扫描失败也落库**（fallback result decision=pass + scanner_version 标记，Complete 强制写 event，job 记 done）——消息必存的核心
 3. `report_llm.go`：输出剥离 `<think>...</think>`
 
-## 8. 报告链路 v2 计划（2026-09-16 晚确定；阶段 1-3 代码已实施，阶段 4 进行中）
+## 8. 报告链路 v3 计划（2026-09-17 确定；阶段 1-2 已实施，阶段 3 进行中）
 
-> 用户已确认三项决策：①日报按 session 总结（session_id 自 9/16 晚起入库，此后数据都有）；②周报=**上周六~本周五**，纯日报聚合，某天日报缺失（休假/无记录）直接跳过该天、不回填 prompt；③月报=聚合当月各周的周报。原则：日→周→月逐级聚合，日报是唯一读原始存储（prompt_audit_events）的环节。
+> v3 决策（用户确认）：①**周期回归正常周一~周日**（回滚 v2 阶段 2 的周六周期，删除 `timezone.StartOfWeekSaturday()`）；②**周报保持周五 20:10 定时生成**（覆盖周一~周五，默认周末不干活；周末干过活 → 之后手动重生成自动补入周六日，重生成会再次自动推飞书卡片）；③**月报语义反转**为「ref 所在自然月」（前端选 8 月 → 生成 8 月；调度器改传上月 1 日，cron 不变）；④**前端周/月选择器**：周报 tab 按周选、月报 tab 按月选；⑤v2 阶段 1 的 session 分组素材**保留不动**。
 
-### 阶段 1：日报素材按 session 分组（读取存储信息）✅ 已完成
+### v2 遗留状态（归档）
 
-- [x] 重写 `FetchPromptSnapshots`（backend/internal/repository/report_repo.go）为两路查询：
-  - ① `session_id <> ''`：`GROUP BY session_id` 各取 `created_at` 最大一条（同 session 每次请求都是"会话至今"的快照，最后一条上下文最全）；session 数上限 8，超过取最近 8 个；
-  - ② `session_id = ''`（9/16 白天历史数据/无会话头客户端）：保留现有 `rn % (total/count)` 均匀分布兜底；
-  - ③ 两路合并按时间正序返回
-- [x] service 层窗口预算按 session 均分：总预算 32 窗（`conversationWindowBudget`）、单 session 上限 8（`conversationWindowsPerSnapCap`，注意 `sampleWindows` 最少 2 窗防除零）、session 快照上限 8 个（`reportSnapshotCount`）
-- [x] 单测：`report_period_test.go`（窗口预算 4 种场景）+ 新 SQL 已在真实库 psql 验证（user 5 两 session 各取最全快照 65537 字符；user 7 空 session 318 条均匀采样 10 条）
-- 背景：多 session 是常态（2026-09-16 usage_logs：user 5/6/8 各 3 个 session、user 2 两个）；旧逻辑按全天请求序号均匀取快照，多 session 时可能漏整个 session 的对话区。9/16 白天旧数据 session_id 为空（迁移 234 之前），重生成走兜底路径效果与旧版相同；session 分组对 9/16 17:54 后的新数据生效
+- ✅ 阶段 1 session 分组：已上线（commit bdcaf9050，随 9/17 飞书版 stable 发布），保留
+- ⏪ 阶段 2 周六周期（`StartOfWeekSaturday`）：已上线但未被用户验证使用，v3 回滚删除
+- ✅ 阶段 3 月报聚合交集周报（pageSize 8）：保留
+- stable 33333 已于 9/17 随飞书功能发布（7c3f80740，包含 v2 全部代码）
 
-### 阶段 2：周报周期改为周六~周五 + 纯日报聚合 ✅ 已完成
+### 阶段 1：后端周期调整 ✅ 已完成
 
-- [x] `timezone.StartOfWeekSaturday()` 新增（原 `StartOfWeek` 周一起点被配额/计费使用，未动）；`ReportPeriod` weekly 改为 **[上周六 00:00, 本周六 00:00)**，手动生成语义一致（ref 在周内任意时刻 → 生成该周六~周五的报告）
-- [x] 聚合保持 `appendSubReports(daily)`（report_service.go）：只聚合本周已成功的日报；某天无日报 → 跳过该天，不回填 prompt
-- [x] 全周 0 篇日报 → 保留现有降级（拉周内 prompt 片段）兜底
-- [x] 单测：周六周期边界（周五晚/周六/周日/周中/跨月共 7 例）+ 日报/月报回归
-- 说明：cron `10 20 * * 5` 与标题 MM.DD-MM.DD 格式不用改；时序天然满足（日报每天 20:00 生成 → 周报 20:10 聚合，当天日报已就绪）；旧周一周期报告与新周期在 reports 表共存（唯一索引按 user_id+type+period_start），互不影响；月报聚合周报 pageSize 6→8（留余量）
+- [x] 周报 `ReportPeriod` 回归 **[本周一 00:00, 下周一 00:00)**（回用 `timezone.StartOfWeek`）；周期语义注释更新（周五晚生成覆盖周一~周五 + 周末手动补漏说明）
+- [x] 删除 `timezone.StartOfWeekSaturday()` + timezone_test.go 对应用例
+- [x] 月报 `ReportPeriod` 反转为 **[ref 月 1 日, 下月 1 日)**；调度器月报 ref 改传 `timezone.StartOfMonth(now).AddDate(0, -1, 0)`（= 上月 1 日，保持 1 日出上月月报）
+- [x] 单测重写（report_period_test.go）：周报周一边界（周五晚/周一/周日）；月报选 8 月任意日期 → 8 月周期；日报回归——全绿
 
-### 阶段 3：月报聚合交集周报 ✅ 验证通过（原实现即满足）
+### 阶段 2：前端周/月选择器（admin + user 两个 ReportsView.vue，无组件库用原生控件）✅ 已完成
 
-- [x] 聚合对象 = 与上月**有交集**的所有周报（repo List 周期覆盖语义，report_repo.go）；跨月周（如 8/29~9/4）同时进 8 月和 9 月两个月报，保证不丢内容，LLM 合并同类天然去重
-- [x] 降级链保留：周报 → 日报 → prompt 片段（现状）
-- 说明：cron 每月 1 日 20:20 生成上月不变（= 月底总结每一周）；生成时上月周报已全部就绪（每周五 20:10）
+- [x] 周报 tab：日期框 → **周下拉**（近 12 周，选项显示 `09.14 ~ 09.20`，value=周一日期）
+- [x] 月报 tab：日期框 → `<input type="month">`（显示 2026-08，发该月 1 日）
+- [x] 筛选与生成共用所在 tab 的选择值（`activeDate` computed；重叠语义天然兼容：发周一/1 日即可筛到该周/该月报告）
+- [x] i18n zh/en 文案（filters.week/month）；周报 cron 默认值 `10 20 * * 5` 不变
 
-### 阶段 4：验证与发布（进行中）
+### 阶段 3：验证与发布 ✅ 已完成（2026-09-17 晚上线）
 
-- [x] 单测全绿（report 相关 + timezone 包；payment 相关 FAIL 为存量问题，干净树复现确认与本次无关）+ go build/go vet 通过 → buildx dev 镜像 → 33336 启动冒烟（HTTP 200、无 panic、迁移正常）
-- [ ] 用户网页验证（dev 33336 或 stable 33333）："日报周报月报"页 → 周期选 2026-09-16 生成日报（session 素材）+ 生成周报（确认 period=09.12-09.18 周六起、聚合日报条目）
-- [ ] 观察当晚 20:00 定时日报（session 分组首次生效）
-- [ ] 观察周五 20:10 首次周报（周六周期 + 纯日报聚合）+ 10 月 1 日 20:20 首次月报（聚合交集周报）
-- [ ] 用户确认后：发 stable → commit + push fork
+- [x] 单测全绿 + vue-tsc EXIT=0 + go build/go vet（容器）→ buildx dev 镜像 → 33336 冒烟（HTTP 200、无 panic；ReportsView 分包含 `type:"month"` 特征确认新前端已生效）
+- [x] reports 表无任何周报/月报存量记录（无周六周期数据需清理）
+- [x] 用户网页验证：周报选本周（09.14~09.20）、月报选 2026-08 出 8 月月报
+- [x] stable 33333 发布（HTTP 200）→ commit + push fork
+
+### v3.1：手动生成不自动推飞书（2026-09-17 晚已上线）
+
+> 背景：管理员点"为所有活跃用户生成"后报告全部自动推群（噪音）。用户决策：手动生成永不自动推；定时生成保持自动推（类型开关+用户参与开关不变）；推送一律可用卡片手动按钮。
+
+- [x] `ReportTrigger`（manual/scheduled）新增于 service/report.go；`GenerateReport`/`GenerateForAllUsers` 加 trigger 参数，仅 `scheduled` 调用 `maybeAutoPushFeishu`
+- [x] 调用点（编译器强制全覆盖）：scheduler → `scheduled`；admin Generate/GenerateAll → `manual`
+- [x] 文案：用户页"参与飞书自动推送"提示改为"仅定时生成"；设置"自动推送类型（仅定时生成）"（zh/en）
+- [x] 验证：go build/vet/test 全绿 + vue-tsc EXIT=0 + buildx + 33336 冒烟 HTTP 200
+- [x] 用户验证通过：①管理员批量生成周报 → 飞书群无新消息；②点卡片"发送到飞书" → 群出现卡片
+- [x] stable 33333 发布 → commit + push fork
 
 ### 后续迭代
 
-- [ ] 飞书推送
+- [ ] 飞书推送优化（分群/自建应用/推送状态，见 §10 后续优化）
 
 ### 已完成（归档）
 
-- [x] push 到 fork 完成（CGKBAI/sub2api，2026-09-15；最新 a864673af）
+- [x] push 到 fork 完成（CGKBAI/sub2api；最新 7c3f80740）
 - [x] 月报类型 + 模板化 LLM prompt 上线（2026-09-16）
 - [x] 双通道报告素材 + 审计 session_id 入库（2026-09-16 晚，commit 40ab07449）
 - [x] LLM 配置修复：base_url 补 /v1、max_prompts=60、truncate=800（SQL 直改 settings 已生效）
+- [x] 飞书推送上线（2026-09-17，commit 7c3f80740，见 §10）
 
 ## 9. 环境速记
 
@@ -159,3 +168,41 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 - 本机工具：Node 24、Docker 29 + buildx（已装 `~/.docker/cli-plugins/docker-buildx`）、git；**无 Go**（编译走 golang 容器）
 - 时区 Asia/Shanghai；deepseek 账号 id=1 的 key **已失效**；可用的上游：deepseek id=2、MiniMax id=5（zhipu 为 coding 域不兼容 /v1 拼接）
 - 大量历史 failed job（~312 条，deepseek 时代+切换窗口）的 prompt 已随 Redis payload TTL 丢失，无法回补；此后消息全量留存
+
+## 10. 飞书推送（2026-09-17 已上线生产）
+
+> 已确认决策：①**群自定义机器人 Webhook**（单群，非自建应用，不支持文件消息）；②**interactive 卡片消息**：报告标题进卡片 header，正文 markdown；③**定时+手动生成成功后自动推**，另有前端"发送到飞书"按钮（本人 user 页 + admin 页任何人）；④日/周/月**三种类型独立推送开关**；⑤用户级"参与推送"开关 `report_push_enabled`（users 表 bool 列，**默认 true**，关闭后不参与自动推送；手动按钮推送不受该开关限制）。推送 best-effort：失败仅日志，不影响报告生成。
+
+### 阶段 1：配置 + 飞书客户端 + 单测 ✅ 已完成
+
+- [x] `ReportLLMConfig`（service/report_llm.go，settings 表 `report_config` 热加载）扩展：`feishu_enabled`、`feishu_webhook_url`、`feishu_secret`（可选加签）、`feishu_push_daily/weekly/monthly`；default/normalize 补齐
+- [x] admin config 接口：`updateReportConfigRequest` 加指针字段；`redactReportConfig` 对 webhook_url/secret 脱敏（`********`，留空=保留旧值，仿 api_key）
+- [x] 新文件 `service/report_feishu.go`（仿 reportLLMClient 惯例：固定超时 http.Client、WithContext、LimitReader、`ErrReportFeishuPushFailed`）：首行 `# ` 提取为 header.title、`## x`→`**x**`（卡片 md 不支持标题语法，其余列表/粗体原生兼容）、超 28000 字节 rune 安全截断；配 secret 时 HMAC-SHA256(`timestamp+"\n"+secret`) base64 加签；响应 `code!=0`（兼容 {code,msg}/{StatusCode,StatusMessage} 两格式）视为失败带回 msg；无 AI 摘要时正文退化为统计行
+- [x] 单测：`report_feishu_test.go`（标题提取/粗体转换/退化/截断/签名/normalize 7 例全绿）
+
+### 阶段 2：自动推送钩子 + 手动推送 API + 用户开关 ✅ 已完成
+
+- [x] 钩子：GenerateReport `persist` 成功且 `status=done` 后 `maybeAutoPushFeishu`；条件 = feishu_enabled && 类型开关 && webhook 非空 && `IsReportPushEnabled(userID)`；独立 10s 超时 best-effort。定时/手动/admin 批量生成天然全覆盖，**scheduler 零改动**
+- [x] 手动推送 API：`POST /api/v1/user/reports/:id/push`（PushUserReport 校验本人，越权按 not found）+ `POST /api/v1/admin/reports/:id/push`（PushReport）；只要求 webhook 已配置（不查类型开关/用户 toggle）；失败信息回传前端 toast；复用现有 repo GetByID
+- [x] 迁移 `235_user_report_push_enabled.sql`：`ALTER TABLE users ADD COLUMN IF NOT EXISTS report_push_enabled BOOLEAN NOT NULL DEFAULT true;`（纯增量；33336 启动已验证列生效）
+- [x] ent schema user.go 加 `report_push_enabled` Default(true) → 容器 `go generate ./ent && ./cmd/server`（注：镜像里无 make/git，直接跑两条 go generate；wire 生成物已更新）；User struct / UpdateProfileRequest `*bool`（复用 PUT /api/v1/user patch 语义）/ UserUpdateFields / user_repo field-mask / api_key_repo userEntityToService / dto User+mapper / user_handler 全链路打通
+
+### 阶段 3：前端 ✅ 已完成
+
+- [x] admin ReportsView 设置对话框"飞书推送"分区（enabled、webhook/secret 密码框留空不改、三类型 checkbox）；api/admin/reports.ts config 类型 + pushToFeishu
+- [x] user/admin 报告卡片"发送到飞书"按钮（loading + toast）；api/reports.ts pushMyReportToFeishu
+- [x] user ReportsView 页头"参与飞书自动推送"开关（getProfile 读 + updateProfile 写 report_push_enabled，失败回滚）
+- [x] i18n zh/en admin/reports.ts（actions.push/autoPush + config.feishu* ）
+- [x] types/index.ts User + api/user.ts updateProfile 加 report_push_enabled；vue-tsc 通过
+
+### 阶段 4：验证发布 ✅ 已完成
+
+- [x] go build/vet + 相关单测全绿（repo/payment 存量 FAIL 干净树复现确认与本次无关）→ buildx dev 镜像 → 33336 冒烟：HTTP 200、迁移 235 生效、无 panic
+- [x] webhook 已配置（settings 表 jsonb 合并写入，ConfigManager 热加载）+ 测试卡片发送成功（机器人返回 StatusCode+code 双格式，验证了响应兼容解析）
+- [x] 网页验证通过（用户确认：生成收卡片/按钮/自动推链路 OK）
+- [x] 发 stable（33333 healthy，HTTP 200）→ commit 7c3f80740 + push fork（CGKBAI/sub2api）
+
+### 后续优化（发送方式迭代方向，待做）
+
+- [ ] 按类型/按用户分群（多 webhook）、自建应用通道（上传 .md 文件消息、发个人 open_id）
+- [ ] 推送状态记录与失败重试（reports 表加 pushed_at）、卡片模板美化（跳转回报告页按钮）

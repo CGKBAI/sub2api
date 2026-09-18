@@ -180,7 +180,13 @@ func (s *ReportSchedulerService) runOnce() {
 		// 先标记已跑，避免失败后每分钟重试轰炸 LLM
 		s.setLastRunAt(ctx, d.kind, now)
 
-		generated, err := s.reportService.GenerateForAllUsers(ctx, d.reportType, now)
+		// 月报语义为「ref 所在自然月」，定时生成上月：ref 传上月 1 日
+		ref := now
+		if d.reportType == domain.ReportTypeMonthly {
+			ref = timezone.StartOfMonth(now).AddDate(0, -1, 0)
+		}
+
+		generated, err := s.reportService.GenerateForAllUsers(ctx, d.reportType, ref, ReportTriggerScheduled)
 		if err != nil {
 			fmt.Printf("[ReportScheduler] generate %s reports: generated=%d err=%v\n", d.kind, generated, err)
 		}
