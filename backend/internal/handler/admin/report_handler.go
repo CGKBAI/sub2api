@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"time"
@@ -124,6 +125,11 @@ func (h *ReportHandler) Generate(c *gin.Context) {
 	response.Success(c, dto.ReportFromService(item))
 }
 
+// reportBatchGenerateTimeout caps a manual generate-all run. It mirrors the
+// scheduler budget (report_scheduler.go) so a full sequential pass — one LLM
+// call per active user — can finish even with many users.
+const reportBatchGenerateTimeout = 30 * time.Minute
+
 // GenerateAll handles generating reports for all active users (manual trigger)
 // POST /api/v1/admin/reports/generate-all
 func (h *ReportHandler) GenerateAll(c *gin.Context) {
@@ -138,7 +144,14 @@ func (h *ReportHandler) GenerateAll(c *gin.Context) {
 		return
 	}
 
-	generated, firstErr := h.reportService.GenerateForAllUsers(c.Request.Context(), req.Type, ref, service.ReportTriggerManual)
+	// Detach from the request context: the batch runs one LLM call per user and
+	// can outlive the HTTP request. If the client (or its 30s axios timeout)
+	// disconnects, cancelling the request context would abort the remaining
+	// users' reports. Run on a background context so the batch always completes.
+	ctx, cancel := context.WithTimeout(context.Background(), reportBatchGenerateTimeout)
+	defer cancel()
+
+	generated, firstErr := h.reportService.GenerateForAllUsers(ctx, req.Type, ref, service.ReportTriggerManual)
 	if generated == 0 && firstErr != nil {
 		response.ErrorFrom(c, firstErr)
 		return

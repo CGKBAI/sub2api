@@ -5,6 +5,17 @@
 import { apiClient } from '../client'
 import type { BasePaginationResponse } from '@/types'
 
+/**
+ * Generate-all runs one LLM call per active user sequentially on the backend,
+ * so a full pass can easily take several minutes. The global 30s axios timeout
+ * would abort the request mid-batch (surfacing as "Network error"), while the
+ * backend keeps processing on a detached context. Align the client timeout with
+ * the backend's 30-minute batch budget; single-user generation caps one LLM
+ * call at 120s server-side, so allow 180s.
+ */
+const GENERATE_ALL_TIMEOUT_MS = 30 * 60 * 1000
+const GENERATE_TIMEOUT_MS = 3 * 60 * 1000
+
 export interface ReportStats {
   requests: number
   input_tokens: number
@@ -80,7 +91,9 @@ export async function generate(request: {
   user_id: number
   date?: string
 }): Promise<Report> {
-  const { data } = await apiClient.post<Report>('/admin/reports/generate', request)
+  const { data } = await apiClient.post<Report>('/admin/reports/generate', request, {
+    timeout: GENERATE_TIMEOUT_MS
+  })
   return data
 }
 
@@ -90,7 +103,8 @@ export async function generateAll(request: {
 }): Promise<{ generated: number; error: string }> {
   const { data } = await apiClient.post<{ generated: number; error: string }>(
     '/admin/reports/generate-all',
-    request
+    request,
+    { timeout: GENERATE_ALL_TIMEOUT_MS }
   )
   return data
 }
