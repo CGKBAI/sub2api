@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-17 晚（**v3 + v3.1 已上线生产 stable 33333**：周期回归周一~周日、月报反转为 ref 所在月、前端周/月选择器、手动生成不自动推飞书仅定时推；session 分组素材保留，见 §8）。
+> 本文档是完整项目上下文。最后更新：2026-09-18（**v3.2 已上线生产 stable 33333**：报告页补 `<AppLayout>` 布局修复侧边栏消失 + 报告卡片换主题 `card` 类；v3+v3.1 业务逻辑不变，见 §8）。
 
 ## 1. 功能与当前状态总览
 
@@ -149,6 +149,15 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 - [x] 验证：go build/vet/test 全绿 + vue-tsc EXIT=0 + buildx + 33336 冒烟 HTTP 200
 - [x] 用户验证通过：①管理员批量生成周报 → 飞书群无新消息；②点卡片"发送到飞书" → 群出现卡片
 - [x] stable 33333 发布 → commit + push fork
+
+### v3.2：报告页布局修复与主题统一（2026-09-18 已上线）
+
+> 背景：点击侧边栏"日报周报月报"后页面无侧边栏/顶栏，只能浏览器回退。根因：本项目无全局布局（App.vue 仅裸 RouterView，每视图自行引入 AppLayout），全站 39 个视图均有 `<AppLayout>` 包裹，唯独两个 ReportsView.vue 缺失，路由切换正常但渲染成裸页面。非 window.open/新标签页问题。
+
+- [x] `views/user/ReportsView.vue` + `views/admin/ReportsView.vue`：模板外包 `<AppLayout>`（恢复侧边栏/顶栏/背景，与全站惯例一致，参照 UsageView 写法）
+- [x] 报告卡片手写类 → 主题 `card p-5`（style.css `.card`：rounded-2xl + 主题边框/阴影，跟随暗色主题变量）
+- [x] 验证：vue-tsc EXIT=0 + buildx dev 镜像 + 33336 冒烟 HTTP 200 + 前端 chunk 特征确认（两个 ReportsView-*.js 均含 AppLayout/card p-5）
+- [x] stable 33333 发布（healthy、HTTP 200、index hash 与 dev 一致）→ commit + push fork
 
 ### 后续迭代
 
