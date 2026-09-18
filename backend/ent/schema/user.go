@@ -123,8 +123,9 @@ func (User) Fields() []ent.Field {
 
 		// 报告飞书推送：为 true 时该用户的日/周/月报生成成功后自动推送到配置的
 		// 飞书群（管理员在报告设置里配置 webhook 与类型开关）。手动按钮推送不受此开关限制。
+		// 默认 false（v3.4）：管理员可在用户管理列表打开，用户本人可在报告页自行开关。
 		field.Bool("report_push_enabled").
-			Default(true),
+			Default(false),
 	}
 }
 

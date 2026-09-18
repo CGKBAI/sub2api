@@ -47,17 +47,17 @@ const activeDate = computed(() => {
   return dailyDate.value
 })
 
-// 飞书推送
-const reportPushEnabled = ref(true)
+// 飞书推送（默认不参与，v3.4：管理员可在用户管理打开，用户可自行双向切换）
+const reportPushEnabled = ref(false)
 const savingPushToggle = ref(false)
 const pushingReportId = ref<number | null>(null)
 
 async function loadProfile() {
   try {
     const profile = await getProfile()
-    reportPushEnabled.value = profile.report_push_enabled ?? true
+    reportPushEnabled.value = profile.report_push_enabled ?? false
   } catch {
-    // profile 读取失败不阻塞报告页，开关保持默认参与
+    // profile 读取失败不阻塞报告页，开关保持默认不参与
   }
 }
 

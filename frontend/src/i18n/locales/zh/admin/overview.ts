@@ -513,6 +513,7 @@ export default {
         usageGemini: '用量 (Gemini)',
         usageAntigravity: '用量 (Antigravity)',
         concurrency: '并发数',
+        reportPush: '飞书推送',
         status: '状态',
         lastActive: '最后活跃时间',
         lastUsed: '最后使用时间',
@@ -555,6 +556,10 @@ export default {
       failedToUpdate: '更新用户失败',
       failedToDelete: '删除用户失败',
       failedToToggle: '更新用户状态失败',
+      reportPushHint: '报告飞书自动推送（仅定时生成；手动按钮推送不受此限制）',
+      reportPushOn: '已开启该用户的飞书自动推送',
+      reportPushOff: '已关闭该用户的飞书自动推送',
+      failedToTogglePush: '切换飞书推送状态失败',
       failedToLoadApiKeys: '加载用户 API 密钥失败',
       deleteConfirm: "确定要删除用户 '{email}' 吗？此操作无法撤销。",
       roles: {

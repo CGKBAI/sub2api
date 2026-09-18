@@ -1992,6 +1992,8 @@ export interface UpdateUserRequest {
   status?: 'active' | 'disabled'
   allowed_groups?: number[] | null
   restrict_public_groups?: boolean
+  // 报告飞书自动推送开关（管理员侧）
+  report_push_enabled?: boolean
   // 用户专属分组倍率配置 (group_id -> rate_multiplier | null)
   // null 表示删除该分组的专属倍率
   group_rates?: Record<number, number | null>

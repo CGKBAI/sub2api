@@ -287,6 +287,11 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		fields.RestrictPublicGroups = true
 	}
 
+	if input.ReportPushEnabled != nil {
+		user.ReportPushEnabled = *input.ReportPushEnabled
+		fields.ReportPushEnabled = true
+	}
+
 	if err := s.userRepo.Update(ctx, user, fields); err != nil {
 		return nil, err
 	}

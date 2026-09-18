@@ -85,6 +85,8 @@ type UpdateUserRequest struct {
 	Status               string   `json:"status" binding:"omitempty,oneof=active disabled"`
 	AllowedGroups        *[]int64 `json:"allowed_groups"`
 	RestrictPublicGroups *bool    `json:"restrict_public_groups"`
+	// ReportPushEnabled 报告飞书自动推送开关（指针区分"未提供"和"显式开关"）
+	ReportPushEnabled *bool `json:"report_push_enabled"`
 	// GroupRates 用户专属分组倍率配置
 	// map[groupID]*rate，nil 表示删除该分组的专属倍率
 	GroupRates map[int64]*float64 `json:"group_rates"`
@@ -356,6 +358,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 		Status:               req.Status,
 		AllowedGroups:        req.AllowedGroups,
 		RestrictPublicGroups: req.RestrictPublicGroups,
+		ReportPushEnabled:    req.ReportPushEnabled,
 		GroupRates:           req.GroupRates,
 		ActorAdminID:         getAdminIDFromContext(c),
 	})

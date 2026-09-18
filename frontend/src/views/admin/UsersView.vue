@@ -599,6 +599,22 @@
             </span>
           </template>
 
+          <!-- 飞书推送开关（报告自动推送，仅定时生成；列默认隐藏，可在列设置中打开） -->
+          <template #cell-report_push="{ row }">
+            <label
+              class="flex w-fit items-center"
+              :title="t('admin.users.reportPushHint')"
+            >
+              <input
+                type="checkbox"
+                class="checkbox"
+                :checked="!!row.report_push_enabled"
+                :disabled="togglingPushId === row.id"
+                @change="handleToggleReportPush(row)"
+              />
+            </label>
+          </template>
+
           <template #cell-actions="{ row }">
             <div class="flex items-center gap-1">
               <!-- Edit Button -->
@@ -878,6 +894,7 @@ const allColumns = computed<Column[]>(() => [
   { key: 'usage_gemini', label: t('admin.users.columns.usageGemini'), sortable: false },
   { key: 'usage_antigravity', label: t('admin.users.columns.usageAntigravity'), sortable: false },
   { key: 'concurrency', label: t('admin.users.columns.concurrency'), sortable: true },
+  { key: 'report_push', label: t('admin.users.columns.reportPush'), sortable: false },
   { key: 'status', label: t('admin.users.columns.status'), sortable: true },
   { key: 'last_active_at', label: t('admin.users.columns.lastActive'), sortable: true },
   { key: 'last_used_at', label: t('admin.users.columns.lastUsed'), sortable: true },
@@ -898,7 +915,7 @@ const hiddenColumns = reactive<Set<string>>(new Set())
 const DEFAULT_HIDDEN_COLUMNS = [
   'notes', 'groups', 'subscriptions', 'usage', 'concurrency',
   'usage_anthropic', 'usage_openai', 'usage_gemini', 'usage_antigravity',
-  'balance_platform_quota'
+  'balance_platform_quota', 'report_push'
 ]
 const REMOVED_COLUMNS = new Set(['last_login_at'])
 // 强制可见列：加载时会被强制移出 hiddenColumns，并在列设置 UI 上 disabled。
@@ -911,10 +928,11 @@ const HIDDEN_COLUMNS_KEY = 'user-hidden-columns'
 // 并在 VERSION_NEW_HIDDEN_COLUMNS 中登记该版本新增的 key。
 // 这样老用户升级后这些新列会被自动隐藏一次，而不会影响他们对其它老列的偏好。
 const COLUMN_SETTINGS_VERSION_KEY = 'user-column-settings-version'
-const COLUMN_SETTINGS_VERSION = 3
+const COLUMN_SETTINGS_VERSION = 4
 const VERSION_NEW_HIDDEN_COLUMNS: Record<number, string[]> = {
   2: ['usage_anthropic', 'usage_openai', 'usage_gemini', 'usage_antigravity'],
-  3: ['balance_platform_quota']
+  3: ['balance_platform_quota'],
+  4: ['report_push']
 }
 
 // Load saved column settings
@@ -1730,6 +1748,23 @@ const handleToggleStatus = async (user: AdminUser) => {
   } catch (error: any) {
     appStore.showError(error.response?.data?.detail || t('admin.users.failedToToggle'))
     console.error('Error toggling user status:', error)
+  }
+}
+
+// 飞书推送开关（仅定时生成自动推送；手动按钮推送不受此限制）
+const togglingPushId = ref<number | null>(null)
+const handleToggleReportPush = async (user: AdminUser) => {
+  const target = !user.report_push_enabled
+  togglingPushId.value = user.id
+  try {
+    await adminAPI.users.update(user.id, { report_push_enabled: target })
+    appStore.showSuccess(target ? t('admin.users.reportPushOn') : t('admin.users.reportPushOff'))
+    loadUsers()
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.users.failedToTogglePush'))
+    console.error('Error toggling report push:', error)
+  } finally {
+    togglingPushId.value = null
   }
 }
 
