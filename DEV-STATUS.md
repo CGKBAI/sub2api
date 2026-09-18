@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-18（**v3.2 已上线生产 stable 33333**：报告页补 `<AppLayout>` 布局修复侧边栏消失 + 报告卡片换主题 `card` 类；v3+v3.1 业务逻辑不变，见 §8）。
+> 本文档是完整项目上下文。最后更新：2026-09-18（**v3.3 已上线生产 stable 33333**：批量生成"为所有活跃用户"修复 Network error——前端超时覆盖 + 后端批量脱离请求 context；v3.2 报告页布局修复，见 §8）。
 
 ## 1. 功能与当前状态总览
 
@@ -158,6 +158,16 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 - [x] 报告卡片手写类 → 主题 `card p-5`（style.css `.card`：rounded-2xl + 主题边框/阴影，跟随暗色主题变量）
 - [x] 验证：vue-tsc EXIT=0 + buildx dev 镜像 + 33336 冒烟 HTTP 200 + 前端 chunk 特征确认（两个 ReportsView-*.js 均含 AppLayout/card p-5）
 - [x] stable 33333 发布（healthy、HTTP 200、index hash 与 dev 一致）→ commit + push fork
+
+### v3.3：批量生成修复 Network error（2026-09-18 已上线）
+
+> 背景：管理员点"为所有活跃用户生成"约 30 秒后报 "Network error. Please check your connection."，仅生成 ~3 人。根因：①前端 axios 全局 30s 超时（`api/client.ts`），`generateAll` 未按惯例（参照 `admin/system.ts`）覆盖超时，每用户 LLM ~10s，3 人即触发；②浏览器断开后 gin 取消 `c.Request.Context()`，后端 `GenerateForAllUsers` 串行循环随之中断，剩余用户永不生成。
+
+- [x] 后端 `handler/admin/report_handler.go`：`GenerateAll` 改用 `context.WithTimeout(context.Background(), 30*time.Minute)`（`reportBatchGenerateTimeout`，与 scheduler 预算一致），脱离请求 context——客户端断开不再中断批量
+- [x] 前端 `api/admin/reports.ts`：`generateAll` 超时 30 分钟、`generate` 3 分钟（对齐后端 LLM 120s 上限+余量），注释说明动机
+- [x] 验证：go build/vet（golang:1.27 容器）+ report 相关单测全绿；tsc 隔离检查 0 错误；buildx dev 镜像 → 33336 冒烟（healthy/HTTP 200/无 panic；admin chunk 含 `generate-all…{timeout:30*60*1e3}`、`generate…{timeout:3*60*1e3}`）→ 用户浏览器实测批量生成通过
+- [x] stable 33333 发布（healthy、HTTP 200、index hash 与 dev 一致）→ commit + push fork
+- 备注：构建时 alpine CDN（dl-cdn）TLS 间歇故障，临时用 sed 切 aliyun 源构建后已还原 Dockerfile；如复发可考虑固化镜像源
 
 ### 后续迭代
 
