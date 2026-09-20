@@ -21,7 +21,7 @@ type Report struct {
 	ID int64 `json:"id,omitempty"`
 	// 所属用户 ID
 	UserID int64 `json:"user_id,omitempty"`
-	// 报告类型: daily, weekly
+	// 报告类型: daily, weekly, monthly
 	Type string `json:"type,omitempty"`
 	// 周期起点（含），服务器时区
 	PeriodStart time.Time `json:"period_start,omitempty"`
@@ -35,6 +35,10 @@ type Report struct {
 	Status string `json:"status,omitempty"`
 	// 生成失败原因
 	Error string `json:"error,omitempty"`
+	// 最近一次飞书推送成功时间（自动/手动，重生成不清除）
+	PushedAt *time.Time `json:"pushed_at,omitempty"`
+	// 最近一次飞书推送失败原因（成功时清空）
+	LastPushError string `json:"last_push_error,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -51,9 +55,9 @@ func (*Report) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case report.FieldID, report.FieldUserID:
 			values[i] = new(sql.NullInt64)
-		case report.FieldType, report.FieldAiSummary, report.FieldStatus, report.FieldError:
+		case report.FieldType, report.FieldAiSummary, report.FieldStatus, report.FieldError, report.FieldLastPushError:
 			values[i] = new(sql.NullString)
-		case report.FieldPeriodStart, report.FieldPeriodEnd, report.FieldCreatedAt, report.FieldUpdatedAt:
+		case report.FieldPeriodStart, report.FieldPeriodEnd, report.FieldPushedAt, report.FieldCreatedAt, report.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -126,6 +130,19 @@ func (_m *Report) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.Error = value.String
 			}
+		case report.FieldPushedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field pushed_at", values[i])
+			} else if value.Valid {
+				_m.PushedAt = new(time.Time)
+				*_m.PushedAt = value.Time
+			}
+		case report.FieldLastPushError:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field last_push_error", values[i])
+			} else if value.Valid {
+				_m.LastPushError = value.String
+			}
 		case report.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field created_at", values[i])
@@ -197,6 +214,14 @@ func (_m *Report) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("error=")
 	builder.WriteString(_m.Error)
+	builder.WriteString(", ")
+	if v := _m.PushedAt; v != nil {
+		builder.WriteString("pushed_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("last_push_error=")
+	builder.WriteString(_m.LastPushError)
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

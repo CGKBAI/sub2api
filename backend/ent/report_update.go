@@ -148,6 +148,40 @@ func (_u *ReportUpdate) SetNillableError(v *string) *ReportUpdate {
 	return _u
 }
 
+// SetPushedAt sets the "pushed_at" field.
+func (_u *ReportUpdate) SetPushedAt(v time.Time) *ReportUpdate {
+	_u.mutation.SetPushedAt(v)
+	return _u
+}
+
+// SetNillablePushedAt sets the "pushed_at" field if the given value is not nil.
+func (_u *ReportUpdate) SetNillablePushedAt(v *time.Time) *ReportUpdate {
+	if v != nil {
+		_u.SetPushedAt(*v)
+	}
+	return _u
+}
+
+// ClearPushedAt clears the value of the "pushed_at" field.
+func (_u *ReportUpdate) ClearPushedAt() *ReportUpdate {
+	_u.mutation.ClearPushedAt()
+	return _u
+}
+
+// SetLastPushError sets the "last_push_error" field.
+func (_u *ReportUpdate) SetLastPushError(v string) *ReportUpdate {
+	_u.mutation.SetLastPushError(v)
+	return _u
+}
+
+// SetNillableLastPushError sets the "last_push_error" field if the given value is not nil.
+func (_u *ReportUpdate) SetNillableLastPushError(v *string) *ReportUpdate {
+	if v != nil {
+		_u.SetLastPushError(*v)
+	}
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *ReportUpdate) SetUpdatedAt(v time.Time) *ReportUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -248,6 +282,15 @@ func (_u *ReportUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Error(); ok {
 		_spec.SetField(report.FieldError, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.PushedAt(); ok {
+		_spec.SetField(report.FieldPushedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PushedAtCleared() {
+		_spec.ClearField(report.FieldPushedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.LastPushError(); ok {
+		_spec.SetField(report.FieldLastPushError, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(report.FieldUpdatedAt, field.TypeTime, value)
@@ -391,6 +434,40 @@ func (_u *ReportUpdateOne) SetNillableError(v *string) *ReportUpdateOne {
 	return _u
 }
 
+// SetPushedAt sets the "pushed_at" field.
+func (_u *ReportUpdateOne) SetPushedAt(v time.Time) *ReportUpdateOne {
+	_u.mutation.SetPushedAt(v)
+	return _u
+}
+
+// SetNillablePushedAt sets the "pushed_at" field if the given value is not nil.
+func (_u *ReportUpdateOne) SetNillablePushedAt(v *time.Time) *ReportUpdateOne {
+	if v != nil {
+		_u.SetPushedAt(*v)
+	}
+	return _u
+}
+
+// ClearPushedAt clears the value of the "pushed_at" field.
+func (_u *ReportUpdateOne) ClearPushedAt() *ReportUpdateOne {
+	_u.mutation.ClearPushedAt()
+	return _u
+}
+
+// SetLastPushError sets the "last_push_error" field.
+func (_u *ReportUpdateOne) SetLastPushError(v string) *ReportUpdateOne {
+	_u.mutation.SetLastPushError(v)
+	return _u
+}
+
+// SetNillableLastPushError sets the "last_push_error" field if the given value is not nil.
+func (_u *ReportUpdateOne) SetNillableLastPushError(v *string) *ReportUpdateOne {
+	if v != nil {
+		_u.SetLastPushError(*v)
+	}
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *ReportUpdateOne) SetUpdatedAt(v time.Time) *ReportUpdateOne {
 	_u.mutation.SetUpdatedAt(v)
@@ -521,6 +598,15 @@ func (_u *ReportUpdateOne) sqlSave(ctx context.Context) (_node *Report, err erro
 	}
 	if value, ok := _u.mutation.Error(); ok {
 		_spec.SetField(report.FieldError, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.PushedAt(); ok {
+		_spec.SetField(report.FieldPushedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PushedAtCleared() {
+		_spec.ClearField(report.FieldPushedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.LastPushError(); ok {
+		_spec.SetField(report.FieldLastPushError, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(report.FieldUpdatedAt, field.TypeTime, value)

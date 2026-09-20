@@ -220,6 +220,20 @@ const modelEntries = (report: Report) =>
             <span class="badge" :class="statusBadgeClass(report.status)">
               {{ t(`admin.reports.status.${report.status}`) }}
             </span>
+            <span
+              v-if="report.pushed_at"
+              class="badge badge-success"
+              :title="new Date(report.pushed_at).toLocaleString()"
+            >
+              {{ t('admin.reports.push.pushed') }}
+            </span>
+            <span
+              v-else-if="report.last_push_error"
+              class="badge badge-danger"
+              :title="report.last_push_error"
+            >
+              {{ t('admin.reports.push.pushFailed') }}
+            </span>
             <span class="ml-auto text-xs text-gray-500 dark:text-gray-400">
               {{ periodLabel(report) }}
             </span>

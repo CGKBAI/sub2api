@@ -54,7 +54,8 @@ func TestOpenAICompatibleScannerRequestContract(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
 		require.Equal(t, DefaultGuardModel, payload["model"])
 		require.Equal(t, float64(0), payload["temperature"])
-		require.Equal(t, float64(64), payload["max_tokens"])
+		// fork 改造：64 → 1024（思考型模型需要输出预算，见 prompt_qwen3guard.go）
+		require.Equal(t, float64(1024), payload["max_tokens"])
 		require.Equal(t, float64(42), payload["seed"])
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`))

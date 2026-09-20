@@ -35,6 +35,7 @@ export default {
     },
     summary: { title: 'AI Summary', empty: 'No AI summary (LLM not configured or no prompts in this period)' },
     status: { pending: 'Pending', done: 'Done', failed: 'Failed' },
+    push: { pushed: 'Pushed', pushFailed: 'Push failed' },
     empty: 'No reports under current filters',
     config: {
       title: 'AI Summary Settings',

@@ -34,6 +34,7 @@ export default {
     },
     summary: { title: 'AI 工作摘要', empty: '暂无 AI 总结（未配置 LLM 或该周期无 prompt 数据）' },
     status: { pending: '生成中', done: '完成', failed: '失败' },
+    push: { pushed: '已推送', pushFailed: '推送失败' },
     empty: '该条件下暂无报告',
     config: {
       title: 'AI 总结设置',

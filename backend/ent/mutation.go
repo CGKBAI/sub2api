@@ -39632,24 +39632,26 @@ func (m *RedeemCodeMutation) ResetEdge(name string) error {
 // ReportMutation represents an operation that mutates the Report nodes in the graph.
 type ReportMutation struct {
 	config
-	op            Op
-	typ           string
-	id            *int64
-	user_id       *int64
-	adduser_id    *int64
-	_type         *string
-	period_start  *time.Time
-	period_end    *time.Time
-	stats         *domain.ReportStats
-	ai_summary    *string
-	status        *string
-	error         *string
-	created_at    *time.Time
-	updated_at    *time.Time
-	clearedFields map[string]struct{}
-	done          bool
-	oldValue      func(context.Context) (*Report, error)
-	predicates    []predicate.Report
+	op              Op
+	typ             string
+	id              *int64
+	user_id         *int64
+	adduser_id      *int64
+	_type           *string
+	period_start    *time.Time
+	period_end      *time.Time
+	stats           *domain.ReportStats
+	ai_summary      *string
+	status          *string
+	error           *string
+	pushed_at       *time.Time
+	last_push_error *string
+	created_at      *time.Time
+	updated_at      *time.Time
+	clearedFields   map[string]struct{}
+	done            bool
+	oldValue        func(context.Context) (*Report, error)
+	predicates      []predicate.Report
 }
 
 var _ ent.Mutation = (*ReportMutation)(nil)
@@ -40058,6 +40060,91 @@ func (m *ReportMutation) ResetError() {
 	m.error = nil
 }
 
+// SetPushedAt sets the "pushed_at" field.
+func (m *ReportMutation) SetPushedAt(t time.Time) {
+	m.pushed_at = &t
+}
+
+// PushedAt returns the value of the "pushed_at" field in the mutation.
+func (m *ReportMutation) PushedAt() (r time.Time, exists bool) {
+	v := m.pushed_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPushedAt returns the old "pushed_at" field's value of the Report entity.
+// If the Report object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ReportMutation) OldPushedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPushedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPushedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPushedAt: %w", err)
+	}
+	return oldValue.PushedAt, nil
+}
+
+// ClearPushedAt clears the value of the "pushed_at" field.
+func (m *ReportMutation) ClearPushedAt() {
+	m.pushed_at = nil
+	m.clearedFields[report.FieldPushedAt] = struct{}{}
+}
+
+// PushedAtCleared returns if the "pushed_at" field was cleared in this mutation.
+func (m *ReportMutation) PushedAtCleared() bool {
+	_, ok := m.clearedFields[report.FieldPushedAt]
+	return ok
+}
+
+// ResetPushedAt resets all changes to the "pushed_at" field.
+func (m *ReportMutation) ResetPushedAt() {
+	m.pushed_at = nil
+	delete(m.clearedFields, report.FieldPushedAt)
+}
+
+// SetLastPushError sets the "last_push_error" field.
+func (m *ReportMutation) SetLastPushError(s string) {
+	m.last_push_error = &s
+}
+
+// LastPushError returns the value of the "last_push_error" field in the mutation.
+func (m *ReportMutation) LastPushError() (r string, exists bool) {
+	v := m.last_push_error
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastPushError returns the old "last_push_error" field's value of the Report entity.
+// If the Report object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ReportMutation) OldLastPushError(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastPushError is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastPushError requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastPushError: %w", err)
+	}
+	return oldValue.LastPushError, nil
+}
+
+// ResetLastPushError resets all changes to the "last_push_error" field.
+func (m *ReportMutation) ResetLastPushError() {
+	m.last_push_error = nil
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *ReportMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -40164,7 +40251,7 @@ func (m *ReportMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ReportMutation) Fields() []string {
-	fields := make([]string, 0, 10)
+	fields := make([]string, 0, 12)
 	if m.user_id != nil {
 		fields = append(fields, report.FieldUserID)
 	}
@@ -40188,6 +40275,12 @@ func (m *ReportMutation) Fields() []string {
 	}
 	if m.error != nil {
 		fields = append(fields, report.FieldError)
+	}
+	if m.pushed_at != nil {
+		fields = append(fields, report.FieldPushedAt)
+	}
+	if m.last_push_error != nil {
+		fields = append(fields, report.FieldLastPushError)
 	}
 	if m.created_at != nil {
 		fields = append(fields, report.FieldCreatedAt)
@@ -40219,6 +40312,10 @@ func (m *ReportMutation) Field(name string) (ent.Value, bool) {
 		return m.Status()
 	case report.FieldError:
 		return m.Error()
+	case report.FieldPushedAt:
+		return m.PushedAt()
+	case report.FieldLastPushError:
+		return m.LastPushError()
 	case report.FieldCreatedAt:
 		return m.CreatedAt()
 	case report.FieldUpdatedAt:
@@ -40248,6 +40345,10 @@ func (m *ReportMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldStatus(ctx)
 	case report.FieldError:
 		return m.OldError(ctx)
+	case report.FieldPushedAt:
+		return m.OldPushedAt(ctx)
+	case report.FieldLastPushError:
+		return m.OldLastPushError(ctx)
 	case report.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case report.FieldUpdatedAt:
@@ -40317,6 +40418,20 @@ func (m *ReportMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetError(v)
 		return nil
+	case report.FieldPushedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPushedAt(v)
+		return nil
+	case report.FieldLastPushError:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastPushError(v)
+		return nil
 	case report.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -40375,7 +40490,11 @@ func (m *ReportMutation) AddField(name string, value ent.Value) error {
 // ClearedFields returns all nullable fields that were cleared during this
 // mutation.
 func (m *ReportMutation) ClearedFields() []string {
-	return nil
+	var fields []string
+	if m.FieldCleared(report.FieldPushedAt) {
+		fields = append(fields, report.FieldPushedAt)
+	}
+	return fields
 }
 
 // FieldCleared returns a boolean indicating if a field with the given name was
@@ -40388,6 +40507,11 @@ func (m *ReportMutation) FieldCleared(name string) bool {
 // ClearField clears the value of the field with the given name. It returns an
 // error if the field is not defined in the schema.
 func (m *ReportMutation) ClearField(name string) error {
+	switch name {
+	case report.FieldPushedAt:
+		m.ClearPushedAt()
+		return nil
+	}
 	return fmt.Errorf("unknown Report nullable field %s", name)
 }
 
@@ -40418,6 +40542,12 @@ func (m *ReportMutation) ResetField(name string) error {
 		return nil
 	case report.FieldError:
 		m.ResetError()
+		return nil
+	case report.FieldPushedAt:
+		m.ResetPushedAt()
+		return nil
+	case report.FieldLastPushError:
+		m.ResetLastPushError()
 		return nil
 	case report.FieldCreatedAt:
 		m.ResetCreatedAt()

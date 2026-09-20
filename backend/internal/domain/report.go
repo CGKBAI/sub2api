@@ -59,8 +59,11 @@ type Report struct {
 	AISummary   string
 	Status      string
 	Error       string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// PushedAt 最近一次飞书推送成功时间（nil = 从未推成功）；LastPushError 最近一次推送失败原因
+	PushedAt      *time.Time
+	LastPushError string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // IsWeekly 报告是否为周报。

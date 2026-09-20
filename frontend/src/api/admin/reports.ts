@@ -40,6 +40,8 @@ export interface Report {
   ai_summary: string
   status: 'pending' | 'done' | 'failed'
   error?: string
+  pushed_at?: string
+  last_push_error?: string
   created_at: string
   updated_at: string
 }

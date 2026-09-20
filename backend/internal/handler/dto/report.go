@@ -18,6 +18,9 @@ type Report struct {
 	AISummary   string              `json:"ai_summary"`
 	Status      string              `json:"status"`
 	Error       string              `json:"error,omitempty"`
+	// PushedAt 最近一次飞书推送成功时间；LastPushError 最近一次推送失败原因
+	PushedAt    *time.Time          `json:"pushed_at,omitempty"`
+	LastPushError string            `json:"last_push_error,omitempty"`
 	CreatedAt   time.Time           `json:"created_at"`
 	UpdatedAt   time.Time           `json:"updated_at"`
 }
@@ -38,6 +41,8 @@ func ReportFromService(r *service.Report) *Report {
 		AISummary:   r.AISummary,
 		Status:      r.Status,
 		Error:       r.Error,
+		PushedAt:    r.PushedAt,
+		LastPushError: r.LastPushError,
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,
 	}

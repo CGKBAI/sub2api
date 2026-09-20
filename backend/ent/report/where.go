@@ -89,6 +89,16 @@ func Error(v string) predicate.Report {
 	return predicate.Report(sql.FieldEQ(FieldError, v))
 }
 
+// PushedAt applies equality check predicate on the "pushed_at" field. It's identical to PushedAtEQ.
+func PushedAt(v time.Time) predicate.Report {
+	return predicate.Report(sql.FieldEQ(FieldPushedAt, v))
+}
+
+// LastPushError applies equality check predicate on the "last_push_error" field. It's identical to LastPushErrorEQ.
+func LastPushError(v string) predicate.Report {
+	return predicate.Report(sql.FieldEQ(FieldLastPushError, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.Report {
 	return predicate.Report(sql.FieldEQ(FieldCreatedAt, v))
@@ -477,6 +487,121 @@ func ErrorEqualFold(v string) predicate.Report {
 // ErrorContainsFold applies the ContainsFold predicate on the "error" field.
 func ErrorContainsFold(v string) predicate.Report {
 	return predicate.Report(sql.FieldContainsFold(FieldError, v))
+}
+
+// PushedAtEQ applies the EQ predicate on the "pushed_at" field.
+func PushedAtEQ(v time.Time) predicate.Report {
+	return predicate.Report(sql.FieldEQ(FieldPushedAt, v))
+}
+
+// PushedAtNEQ applies the NEQ predicate on the "pushed_at" field.
+func PushedAtNEQ(v time.Time) predicate.Report {
+	return predicate.Report(sql.FieldNEQ(FieldPushedAt, v))
+}
+
+// PushedAtIn applies the In predicate on the "pushed_at" field.
+func PushedAtIn(vs ...time.Time) predicate.Report {
+	return predicate.Report(sql.FieldIn(FieldPushedAt, vs...))
+}
+
+// PushedAtNotIn applies the NotIn predicate on the "pushed_at" field.
+func PushedAtNotIn(vs ...time.Time) predicate.Report {
+	return predicate.Report(sql.FieldNotIn(FieldPushedAt, vs...))
+}
+
+// PushedAtGT applies the GT predicate on the "pushed_at" field.
+func PushedAtGT(v time.Time) predicate.Report {
+	return predicate.Report(sql.FieldGT(FieldPushedAt, v))
+}
+
+// PushedAtGTE applies the GTE predicate on the "pushed_at" field.
+func PushedAtGTE(v time.Time) predicate.Report {
+	return predicate.Report(sql.FieldGTE(FieldPushedAt, v))
+}
+
+// PushedAtLT applies the LT predicate on the "pushed_at" field.
+func PushedAtLT(v time.Time) predicate.Report {
+	return predicate.Report(sql.FieldLT(FieldPushedAt, v))
+}
+
+// PushedAtLTE applies the LTE predicate on the "pushed_at" field.
+func PushedAtLTE(v time.Time) predicate.Report {
+	return predicate.Report(sql.FieldLTE(FieldPushedAt, v))
+}
+
+// PushedAtIsNil applies the IsNil predicate on the "pushed_at" field.
+func PushedAtIsNil() predicate.Report {
+	return predicate.Report(sql.FieldIsNull(FieldPushedAt))
+}
+
+// PushedAtNotNil applies the NotNil predicate on the "pushed_at" field.
+func PushedAtNotNil() predicate.Report {
+	return predicate.Report(sql.FieldNotNull(FieldPushedAt))
+}
+
+// LastPushErrorEQ applies the EQ predicate on the "last_push_error" field.
+func LastPushErrorEQ(v string) predicate.Report {
+	return predicate.Report(sql.FieldEQ(FieldLastPushError, v))
+}
+
+// LastPushErrorNEQ applies the NEQ predicate on the "last_push_error" field.
+func LastPushErrorNEQ(v string) predicate.Report {
+	return predicate.Report(sql.FieldNEQ(FieldLastPushError, v))
+}
+
+// LastPushErrorIn applies the In predicate on the "last_push_error" field.
+func LastPushErrorIn(vs ...string) predicate.Report {
+	return predicate.Report(sql.FieldIn(FieldLastPushError, vs...))
+}
+
+// LastPushErrorNotIn applies the NotIn predicate on the "last_push_error" field.
+func LastPushErrorNotIn(vs ...string) predicate.Report {
+	return predicate.Report(sql.FieldNotIn(FieldLastPushError, vs...))
+}
+
+// LastPushErrorGT applies the GT predicate on the "last_push_error" field.
+func LastPushErrorGT(v string) predicate.Report {
+	return predicate.Report(sql.FieldGT(FieldLastPushError, v))
+}
+
+// LastPushErrorGTE applies the GTE predicate on the "last_push_error" field.
+func LastPushErrorGTE(v string) predicate.Report {
+	return predicate.Report(sql.FieldGTE(FieldLastPushError, v))
+}
+
+// LastPushErrorLT applies the LT predicate on the "last_push_error" field.
+func LastPushErrorLT(v string) predicate.Report {
+	return predicate.Report(sql.FieldLT(FieldLastPushError, v))
+}
+
+// LastPushErrorLTE applies the LTE predicate on the "last_push_error" field.
+func LastPushErrorLTE(v string) predicate.Report {
+	return predicate.Report(sql.FieldLTE(FieldLastPushError, v))
+}
+
+// LastPushErrorContains applies the Contains predicate on the "last_push_error" field.
+func LastPushErrorContains(v string) predicate.Report {
+	return predicate.Report(sql.FieldContains(FieldLastPushError, v))
+}
+
+// LastPushErrorHasPrefix applies the HasPrefix predicate on the "last_push_error" field.
+func LastPushErrorHasPrefix(v string) predicate.Report {
+	return predicate.Report(sql.FieldHasPrefix(FieldLastPushError, v))
+}
+
+// LastPushErrorHasSuffix applies the HasSuffix predicate on the "last_push_error" field.
+func LastPushErrorHasSuffix(v string) predicate.Report {
+	return predicate.Report(sql.FieldHasSuffix(FieldLastPushError, v))
+}
+
+// LastPushErrorEqualFold applies the EqualFold predicate on the "last_push_error" field.
+func LastPushErrorEqualFold(v string) predicate.Report {
+	return predicate.Report(sql.FieldEqualFold(FieldLastPushError, v))
+}
+
+// LastPushErrorContainsFold applies the ContainsFold predicate on the "last_push_error" field.
+func LastPushErrorContainsFold(v string) predicate.Report {
+	return predicate.Report(sql.FieldContainsFold(FieldLastPushError, v))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

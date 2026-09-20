@@ -95,6 +95,34 @@ func (_c *ReportCreate) SetNillableError(v *string) *ReportCreate {
 	return _c
 }
 
+// SetPushedAt sets the "pushed_at" field.
+func (_c *ReportCreate) SetPushedAt(v time.Time) *ReportCreate {
+	_c.mutation.SetPushedAt(v)
+	return _c
+}
+
+// SetNillablePushedAt sets the "pushed_at" field if the given value is not nil.
+func (_c *ReportCreate) SetNillablePushedAt(v *time.Time) *ReportCreate {
+	if v != nil {
+		_c.SetPushedAt(*v)
+	}
+	return _c
+}
+
+// SetLastPushError sets the "last_push_error" field.
+func (_c *ReportCreate) SetLastPushError(v string) *ReportCreate {
+	_c.mutation.SetLastPushError(v)
+	return _c
+}
+
+// SetNillableLastPushError sets the "last_push_error" field if the given value is not nil.
+func (_c *ReportCreate) SetNillableLastPushError(v *string) *ReportCreate {
+	if v != nil {
+		_c.SetLastPushError(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *ReportCreate) SetCreatedAt(v time.Time) *ReportCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -170,6 +198,10 @@ func (_c *ReportCreate) defaults() {
 		v := report.DefaultError
 		_c.mutation.SetError(v)
 	}
+	if _, ok := _c.mutation.LastPushError(); !ok {
+		v := report.DefaultLastPushError
+		_c.mutation.SetLastPushError(v)
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := report.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
@@ -215,6 +247,9 @@ func (_c *ReportCreate) check() error {
 	}
 	if _, ok := _c.mutation.Error(); !ok {
 		return &ValidationError{Name: "error", err: errors.New(`ent: missing required field "Report.error"`)}
+	}
+	if _, ok := _c.mutation.LastPushError(); !ok {
+		return &ValidationError{Name: "last_push_error", err: errors.New(`ent: missing required field "Report.last_push_error"`)}
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "Report.created_at"`)}
@@ -280,6 +315,14 @@ func (_c *ReportCreate) createSpec() (*Report, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Error(); ok {
 		_spec.SetField(report.FieldError, field.TypeString, value)
 		_node.Error = value
+	}
+	if value, ok := _c.mutation.PushedAt(); ok {
+		_spec.SetField(report.FieldPushedAt, field.TypeTime, value)
+		_node.PushedAt = &value
+	}
+	if value, ok := _c.mutation.LastPushError(); ok {
+		_spec.SetField(report.FieldLastPushError, field.TypeString, value)
+		_node.LastPushError = value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(report.FieldCreatedAt, field.TypeTime, value)
@@ -440,6 +483,36 @@ func (u *ReportUpsert) SetError(v string) *ReportUpsert {
 // UpdateError sets the "error" field to the value that was provided on create.
 func (u *ReportUpsert) UpdateError() *ReportUpsert {
 	u.SetExcluded(report.FieldError)
+	return u
+}
+
+// SetPushedAt sets the "pushed_at" field.
+func (u *ReportUpsert) SetPushedAt(v time.Time) *ReportUpsert {
+	u.Set(report.FieldPushedAt, v)
+	return u
+}
+
+// UpdatePushedAt sets the "pushed_at" field to the value that was provided on create.
+func (u *ReportUpsert) UpdatePushedAt() *ReportUpsert {
+	u.SetExcluded(report.FieldPushedAt)
+	return u
+}
+
+// ClearPushedAt clears the value of the "pushed_at" field.
+func (u *ReportUpsert) ClearPushedAt() *ReportUpsert {
+	u.SetNull(report.FieldPushedAt)
+	return u
+}
+
+// SetLastPushError sets the "last_push_error" field.
+func (u *ReportUpsert) SetLastPushError(v string) *ReportUpsert {
+	u.Set(report.FieldLastPushError, v)
+	return u
+}
+
+// UpdateLastPushError sets the "last_push_error" field to the value that was provided on create.
+func (u *ReportUpsert) UpdateLastPushError() *ReportUpsert {
+	u.SetExcluded(report.FieldLastPushError)
 	return u
 }
 
@@ -616,6 +689,41 @@ func (u *ReportUpsertOne) SetError(v string) *ReportUpsertOne {
 func (u *ReportUpsertOne) UpdateError() *ReportUpsertOne {
 	return u.Update(func(s *ReportUpsert) {
 		s.UpdateError()
+	})
+}
+
+// SetPushedAt sets the "pushed_at" field.
+func (u *ReportUpsertOne) SetPushedAt(v time.Time) *ReportUpsertOne {
+	return u.Update(func(s *ReportUpsert) {
+		s.SetPushedAt(v)
+	})
+}
+
+// UpdatePushedAt sets the "pushed_at" field to the value that was provided on create.
+func (u *ReportUpsertOne) UpdatePushedAt() *ReportUpsertOne {
+	return u.Update(func(s *ReportUpsert) {
+		s.UpdatePushedAt()
+	})
+}
+
+// ClearPushedAt clears the value of the "pushed_at" field.
+func (u *ReportUpsertOne) ClearPushedAt() *ReportUpsertOne {
+	return u.Update(func(s *ReportUpsert) {
+		s.ClearPushedAt()
+	})
+}
+
+// SetLastPushError sets the "last_push_error" field.
+func (u *ReportUpsertOne) SetLastPushError(v string) *ReportUpsertOne {
+	return u.Update(func(s *ReportUpsert) {
+		s.SetLastPushError(v)
+	})
+}
+
+// UpdateLastPushError sets the "last_push_error" field to the value that was provided on create.
+func (u *ReportUpsertOne) UpdateLastPushError() *ReportUpsertOne {
+	return u.Update(func(s *ReportUpsert) {
+		s.UpdateLastPushError()
 	})
 }
 
@@ -960,6 +1068,41 @@ func (u *ReportUpsertBulk) SetError(v string) *ReportUpsertBulk {
 func (u *ReportUpsertBulk) UpdateError() *ReportUpsertBulk {
 	return u.Update(func(s *ReportUpsert) {
 		s.UpdateError()
+	})
+}
+
+// SetPushedAt sets the "pushed_at" field.
+func (u *ReportUpsertBulk) SetPushedAt(v time.Time) *ReportUpsertBulk {
+	return u.Update(func(s *ReportUpsert) {
+		s.SetPushedAt(v)
+	})
+}
+
+// UpdatePushedAt sets the "pushed_at" field to the value that was provided on create.
+func (u *ReportUpsertBulk) UpdatePushedAt() *ReportUpsertBulk {
+	return u.Update(func(s *ReportUpsert) {
+		s.UpdatePushedAt()
+	})
+}
+
+// ClearPushedAt clears the value of the "pushed_at" field.
+func (u *ReportUpsertBulk) ClearPushedAt() *ReportUpsertBulk {
+	return u.Update(func(s *ReportUpsert) {
+		s.ClearPushedAt()
+	})
+}
+
+// SetLastPushError sets the "last_push_error" field.
+func (u *ReportUpsertBulk) SetLastPushError(v string) *ReportUpsertBulk {
+	return u.Update(func(s *ReportUpsert) {
+		s.SetLastPushError(v)
+	})
+}
+
+// UpdateLastPushError sets the "last_push_error" field to the value that was provided on create.
+func (u *ReportUpsertBulk) UpdateLastPushError() *ReportUpsertBulk {
+	return u.Update(func(s *ReportUpsert) {
+		s.UpdateLastPushError()
 	})
 }
 

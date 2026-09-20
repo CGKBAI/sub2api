@@ -65,6 +65,9 @@ type ReportRepository interface {
 	GetUsername(ctx context.Context, userID int64) (string, error)
 	// IsReportPushEnabled 查询用户是否参与报告飞书自动推送（users.report_push_enabled）。
 	IsReportPushEnabled(ctx context.Context, userID int64) (bool, error)
+	// MarkPushResult 记录报告最近一次飞书推送结果：
+	// pushErr 为空表示成功（写 pushed_at 并清空 last_push_error），否则仅记录失败原因。
+	MarkPushResult(ctx context.Context, id int64, pushedAt time.Time, pushErr string) error
 }
 
 // UserPromptSnippet 是用于 LLM 总结的单条 prompt 片段。

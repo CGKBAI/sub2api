@@ -36,7 +36,7 @@ func (Report) Fields() []ent.Field {
 			Comment("所属用户 ID"),
 		field.String("type").
 			MaxLen(10).
-			Comment("报告类型: daily, weekly"),
+			Comment("报告类型: daily, weekly, monthly"),
 		field.Time("period_start").
 			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}).
 			Comment("周期起点（含），服务器时区"),
@@ -58,6 +58,15 @@ func (Report) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "text"}).
 			Default("").
 			Comment("生成失败原因"),
+		field.Time("pushed_at").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}).
+			Comment("最近一次飞书推送成功时间（自动/手动，重生成不清除）"),
+		field.String("last_push_error").
+			SchemaType(map[string]string{dialect.Postgres: "text"}).
+			Default("").
+			Comment("最近一次飞书推送失败原因（成功时清空）"),
 		field.Time("created_at").
 			Immutable().
 			Default(time.Now).
@@ -72,9 +81,9 @@ func (Report) Fields() []ent.Field {
 // Indexes 定义数据库索引。
 func (Report) Indexes() []ent.Index {
 	return []ent.Index{
-		// 唯一约束：防双跑/重复点击产生重复报告
+		// 唯一约束：防双跑/重复点击产生重复报告（前缀已覆盖查询需求，
+		// 勿再加同列非唯一索引——与唯一索引同名会导致 ent 自动迁移建索引冲突）
 		index.Fields("user_id", "type", "period_start").Unique(),
 		index.Fields("type", "period_start"),
-		index.Fields("user_id", "type", "period_start"),
 	}
 }

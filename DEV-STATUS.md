@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-18（**v3.4 已上线生产 stable 33333**：飞书自动推送默认关闭 + 管理员用户列表逐行开关、用户仍可自行双向切换；v3.3 批量生成 Network error 修复，见 §8）。
+> 本文档是完整项目上下文。最后更新：2026-09-20（**v3.5 健壮性修复已上线生产 stable 33333**：调度器补丁 + 审计降级重试兜底 + 推送状态落库 + 重生成不覆盖好报告，见 §8 v3.5）。
 
 ## 1. 功能与当前状态总览
 
@@ -78,7 +78,7 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 - **格式**：`full_prompt` = 拍平纯文本（非 JSON）= [最后一条用户消息原文] + \n\n + [其余上下文（system/历史）]，段间无角色标记；截断 65536 runes（超长加 `…`）
 - `redacted_preview` = 前 28 字符脱敏预览；`prompt_hash` = SHA256
 - 元数据：user_id/user_email_snapshot/api_key_name_snapshot/model/provider/endpoint/created_at 等，`(user_id, created_at DESC)` 索引现成
-- 扫描失败的事件：decision=pass + `scanner_version="scan_failed:<code>"`（降级标记，可 SQL 过滤）
+- 扫描失败的事件：decision=pass + `scanner_version="scan_failed:<code>"`（降级标记，可 SQL 过滤；v3.5 起仅在重试耗尽/不可重试后降级，且前面 chunk 已成功的真实发现会聚合保留）
 - 查询示例：`SELECT created_at, model, full_prompt FROM prompt_audit_events WHERE user_id=9 AND created_at >= '2026-09-15' ORDER BY created_at;`
 
 ## 6. 审计与报告配置（存 settings 表，两实例共享生效）
@@ -181,9 +181,26 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 - [x] stable 33333 发布（healthy、HTTP 200、index hash Cm7z44b8 与 dev 一致；DB 1/15 true = 测试时管理员打开的用户）→ commit + push fork
 - 基建：Dockerfile 固化 aliyun apk 镜像源（dl-cdn TLS 二次复现，与 GOPROXY=goproxy.cn 同理，注释已写明）；另 vue-tsc 全量检查方法：`rsync frontend → /tmp 排除 node_modules → corepack pnpm@9 install --frozen-lockfile → node_modules/.bin/vue-tsc --noEmit`
 
+### v3.5：调度器/审计/推送健壮性修复（2026-09-20 已上线）
+
+> 背景：对照 §7 改动清单做全量代码审查，发现 4 个高优缺陷：①同周期重生成遇 LLM 失败会用空 summary/failed 状态覆盖原有 done 报告（数据丢失）；②调度器 last_run TTL 24h 对月报（30 天周期）错过即永久丢失、leader 锁 TTL 5min < 任务 30min 且无续期、日/周/月三种报告共享一个 30min 预算互相挤占且 last_run 先置位；③审计扫描失败立即降级落库，绕过原有 backoff 重试（瞬时 429/超时即永久免扫），且打红 prompt_worker_test 两个用例未修；④飞书推送状态零记录（失败无法补推、手动按钮无幂等依据、管理端无法审计）。调度器决策：**暂不重构对齐 ops 模式，只打最小补丁**。
+
+- [x] `service/report_service.go` GenerateReport：LLM 失败时先 `GetByUserPeriod`，已有 done+摘要旧报告 → 保留并直接返回（日志留痕）；仅无旧报告或旧报告本身 failed 才落 failed 记录
+- [x] `service/report_scheduler.go` 最小补丁：①last_run TTL 24h→35 天（覆盖月报周期，宕机恢复 catch-up 有效）；②leader 锁加 90s 续期 watchdog（compare-and-expire Lua `reportSchedulerRenewScript`，runOnce 结束停止）；③每类型独立 30min 预算（`reportSchedulerJobTimeout` ctx 移入 defs 循环）；④顺手：`fmt.Printf`→`logger.LegacyPrintf`、cron 解析失败补 error 日志、gofmt 对齐 scheduleDef
+- [x] `securityaudit/prompt_worker.go` 降级语义修正：`Retryable && Attempts<MaxAttempts` 仍走 `finishFailure` backoff（5s/30s/2min）；**重试耗尽或不可重试才降级落库**；降级时若前面 chunk 已成功 → `AggregateResults` 聚合保留真实发现（warn 不丢），`ScannerVersion` 统一附加 `scan_failed:` 标记；fallback `ScannerBackend` 改 `"degraded"` + 补 `PolicyID: "priority", PolicyVersion: 1`；scanner_version 标记格式不变（§5 SQL 过滤兼容）
+- [x] 测试修复 ×3：①prompt_worker_test `TestWorkerRetryBackoffTerminalFailureAndFailover`（max-attempts/invalid-terminal 改断言降级行为：NoError+completeCount 1+storePass 强制+payload 删除）；②`TestPromptAuditSyntheticAsyncBaseline`（99/100 降级返回 nil，completeCount 98→100、eventCount 8→10）；③存量 `TestOpenAICompatibleScannerRequestContract` max_tokens 断言 64→1024（v3.2 改造遗漏，审计 agent 复盘发现的第 3 个打红测试）；新增 `TestWorkerDegradesOnlyAfterRetryBudgetExhausted`（预算内重试/耗尽降级/部分成功保留发现）3 例
+- [x] 迁移 `237_report_push_state.sql`：reports 加 `pushed_at TIMESTAMPTZ NULL` + `last_push_error TEXT NOT NULL DEFAULT ''`（纯增量；Update 不触碰这两列 → 推送状态跨重生成保留；33336 启动已验证列生效）
+- [x] ent schema report.go：加 pushed_at（Optional+Nillable）/last_push_error 字段 → 容器 `go generate ./ent` 生成物提交；**顺带删除与唯一索引同名的冗余非唯一索引声明**——该冗余使 enttest 自动迁移建 `report_user_id_type_period_start` 报 already exists，**repository 全套测试自 232 起一直红（~40 例），本轮根因修复后首次全绿**；type 注释补 monthly
+- [x] 推送状态落库：`ReportRepository.MarkPushResult(ctx,id,pushedAt,pushErr)` 新增（成功写 pushed_at 并清 last_push_error，失败仅记原因）；`maybeAutoPushFeishu`（自动）与 `pushReportWithConfig`（手动 admin/user）统一接入 `markPushResult` helper（独立 Background ctx，防调度预算/请求取消丢状态）
+- [x] DTO/前端：dto Report 加 pushed_at/last_push_error（omitempty）；admin/user 报告卡片加「已推送/推送失败」徽标（title 悬浮显示推送时间/失败原因）；i18n `push.pushed/pushFailed` zh/en；`api/admin/reports.ts` Report 类型补字段（user api 复用）
+- [x] 验证：go build/vet 全绿 + securityaudit 全绿 + service(Report|Feishu) 全绿 + **repository 全套首次全绿** + vue-tsc 全量 EXIT=0（/tmp 隔离 pnpm@9 流程）→ buildx dev → 33336 冒烟（healthy/HTTP 200/无 panic/迁移 237 生效/两个 ReportsView chunk 均含 pushFailed 特征）
+- [x] 用户浏览器验证 33336 通过（手动推送一张卡片到飞书正常、报告页正常）→ stable 33333 发布 → commit + push fork
+- 坑位记录：①容器 codegen 以 root 写文件导致后续 git 操作 Permission denied，需 `docker run --rm -v ...:/app alpine chown -R 1015:1008 /app/ent` 修属主；②`git checkout -- backend/ent` 会连手写的 ent/schema/*.go 一起还原，恢复现场后需重放 schema 编辑再重新 generate；③以 `--user 1015:1008` 跑 go generate 会写出损坏文件（GEN=1 内容错乱），**保持 root 运行 + 事后 chown** 的既定流程
+
 ### 后续迭代
 
-- [ ] 飞书推送优化（分群/自建应用/推送状态，见 §10 后续优化）
+- [ ] 飞书推送优化（分群/自建应用/推送状态——推送状态已由 v3.5 落库，剩分群/自建应用/失败重试队列，见 §10 后续优化）
+- [ ] 代码审查中优遗留（2026-09-20 审查结论）：批量生成异步化（generate-all 30min 同步阻塞）、每用户 N+1 查询、persist 改 UPSERT、`MaxPrompts` 死配置接线、cron 保存校验、脱敏值回写覆盖风险、64k 头尾拼接保留最新轮次、`left(2000)` 截断丢未闭合 reminder、LLM 上下文总预算 cap、前端列表竞态/分页/admin-user 视图抽组件、prompt_audit_events 保留策略
 
 ### 已完成（归档）
 

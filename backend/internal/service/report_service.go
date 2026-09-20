@@ -133,6 +133,15 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 			// LLM 未配置：产出纯统计报告，不算失败
 			summary = ""
 		} else {
+			// LLM 失败：若该周期已有生成成功的报告（含摘要），保留旧报告不覆盖，
+			// 避免定时重试/手动重生成偶发失败摧毁原有成果
+			existing, gErr := s.reportRepo.GetByUserPeriod(ctx, userID, reportType, start)
+			if gErr == nil && existing != nil && existing.Status == domain.ReportStatusDone && strings.TrimSpace(existing.AISummary) != "" {
+				logger.LegacyPrintf("service.report",
+					"[Report] generate %s report for user %d failed but existing done report preserved: %v",
+					reportType, userID, llmErr)
+				return existing, nil
+			}
 			report.Status = domain.ReportStatusFailed
 			report.Error = truncateReportError(llmErr.Error())
 			report.AISummary = ""
@@ -190,12 +199,38 @@ func (s *ReportService) maybeAutoPushFeishu(ctx context.Context, cfg *ReportLLMC
 	}
 	pushCtx, cancel := context.WithTimeout(ctx, reportFeishuPushTimeout)
 	defer cancel()
-	if err := s.feishu.PushReportCard(pushCtx, cfg, report); err != nil {
-		logger.LegacyPrintf("service.report", "[ReportFeishu] auto push %s report %d to feishu: %v", report.Type, report.ID, err)
+	pushErr := s.feishu.PushReportCard(pushCtx, cfg, report)
+	if pushErr != nil {
+		logger.LegacyPrintf("service.report", "[ReportFeishu] auto push %s report %d to feishu: %v", report.Type, report.ID, pushErr)
 	}
+	s.markPushResult(report, pushErr)
 }
 
-// pushReportWithConfig 手动推送单篇报告（独立 10s 超时）。
+// markPushResult 持久化推送结果（成功写 pushed_at，失败记 last_push_error）。
+// best-effort：落库失败仅记日志，不影响推送调用方；用独立 Background ctx，
+// 避免调用方（调度预算/请求）已取消时推送状态丢失。
+func (s *ReportService) markPushResult(report *Report, pushErr error) {
+	if s == nil || s.reportRepo == nil || report == nil || report.ID <= 0 {
+		return
+	}
+	now := timezone.Now()
+	if pushErr != nil {
+		msg := truncateReportError(pushErr.Error())
+		if err := s.reportRepo.MarkPushResult(context.Background(), report.ID, now, msg); err != nil {
+			logger.LegacyPrintf("service.report", "[ReportFeishu] record push failure for report %d: %v", report.ID, err)
+		}
+		report.LastPushError = msg
+		return
+	}
+	if err := s.reportRepo.MarkPushResult(context.Background(), report.ID, now, ""); err != nil {
+		logger.LegacyPrintf("service.report", "[ReportFeishu] record push success for report %d: %v", report.ID, err)
+		return
+	}
+	report.PushedAt = &now
+	report.LastPushError = ""
+}
+
+// pushReportWithConfig 手动推送单篇报告（独立 10s 超时），并记录推送结果。
 func (s *ReportService) pushReportWithConfig(ctx context.Context, report *Report) error {
 	cfg, err := s.GetReportConfig(ctx)
 	if err != nil {
@@ -203,7 +238,9 @@ func (s *ReportService) pushReportWithConfig(ctx context.Context, report *Report
 	}
 	pushCtx, cancel := context.WithTimeout(ctx, reportFeishuPushTimeout)
 	defer cancel()
-	return s.feishu.PushReportCard(pushCtx, cfg, report)
+	pushErr := s.feishu.PushReportCard(pushCtx, cfg, report)
+	s.markPushResult(report, pushErr)
+	return pushErr
 }
 
 // PushReport 手动推送指定报告到飞书（管理端按钮）。

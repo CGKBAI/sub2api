@@ -1764,12 +1764,16 @@ func init() {
 	reportDescError := reportFields[7].Descriptor()
 	// report.DefaultError holds the default value on creation for the error field.
 	report.DefaultError = reportDescError.Default.(string)
+	// reportDescLastPushError is the schema descriptor for last_push_error field.
+	reportDescLastPushError := reportFields[9].Descriptor()
+	// report.DefaultLastPushError holds the default value on creation for the last_push_error field.
+	report.DefaultLastPushError = reportDescLastPushError.Default.(string)
 	// reportDescCreatedAt is the schema descriptor for created_at field.
-	reportDescCreatedAt := reportFields[8].Descriptor()
+	reportDescCreatedAt := reportFields[10].Descriptor()
 	// report.DefaultCreatedAt holds the default value on creation for the created_at field.
 	report.DefaultCreatedAt = reportDescCreatedAt.Default.(func() time.Time)
 	// reportDescUpdatedAt is the schema descriptor for updated_at field.
-	reportDescUpdatedAt := reportFields[9].Descriptor()
+	reportDescUpdatedAt := reportFields[11].Descriptor()
 	// report.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	report.DefaultUpdatedAt = reportDescUpdatedAt.Default.(func() time.Time)
 	// report.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

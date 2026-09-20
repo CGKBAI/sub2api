@@ -396,6 +396,20 @@ func (r *reportRepository) IsReportPushEnabled(ctx context.Context, userID int64
 	return u.ReportPushEnabled, nil
 }
 
+// MarkPushResult 记录报告最近一次飞书推送结果。
+// pushErr 为空 = 成功：写 pushed_at 并清空 last_push_error；否则仅记录失败原因。
+func (r *reportRepository) MarkPushResult(ctx context.Context, id int64, pushedAt time.Time, pushErr string) error {
+	client := clientFromContext(ctx, r.client)
+	upd := client.Report.UpdateOneID(id).SetLastPushError(pushErr)
+	if pushErr == "" {
+		upd = upd.SetPushedAt(pushedAt)
+	}
+	if _, err := upd.Save(ctx); err != nil {
+		return translatePersistenceError(err, domain.ErrReportNotFound, nil)
+	}
+	return nil
+}
+
 // attachUsernames 批量补齐 username（users 表 LEFT JOIN 等价实现）。
 func (r *reportRepository) attachUsernames(ctx context.Context, items []*service.Report) {
 	if len(items) == 0 {
@@ -447,6 +461,8 @@ func applyReportEntityToService(dst *service.Report, src *dbent.Report) {
 	dst.AISummary = src.AiSummary
 	dst.Status = src.Status
 	dst.Error = src.Error
+	dst.PushedAt = src.PushedAt
+	dst.LastPushError = src.LastPushError
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
 }
@@ -465,6 +481,8 @@ func reportEntityToService(m *dbent.Report) *service.Report {
 		AISummary:   m.AiSummary,
 		Status:      m.Status,
 		Error:       m.Error,
+		PushedAt:    m.PushedAt,
+		LastPushError: m.LastPushError,
 		CreatedAt:   m.CreatedAt,
 		UpdatedAt:   m.UpdatedAt,
 	}

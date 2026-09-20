@@ -29,6 +29,10 @@ const (
 	FieldStatus = "status"
 	// FieldError holds the string denoting the error field in the database.
 	FieldError = "error"
+	// FieldPushedAt holds the string denoting the pushed_at field in the database.
+	FieldPushedAt = "pushed_at"
+	// FieldLastPushError holds the string denoting the last_push_error field in the database.
+	FieldLastPushError = "last_push_error"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -48,6 +52,8 @@ var Columns = []string{
 	FieldAiSummary,
 	FieldStatus,
 	FieldError,
+	FieldPushedAt,
+	FieldLastPushError,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -73,6 +79,8 @@ var (
 	StatusValidator func(string) error
 	// DefaultError holds the default value on creation for the "error" field.
 	DefaultError string
+	// DefaultLastPushError holds the default value on creation for the "last_push_error" field.
+	DefaultLastPushError string
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -122,6 +130,16 @@ func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 // ByError orders the results by the error field.
 func ByError(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldError, opts...).ToFunc()
+}
+
+// ByPushedAt orders the results by the pushed_at field.
+func ByPushedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPushedAt, opts...).ToFunc()
+}
+
+// ByLastPushError orders the results by the last_push_error field.
+func ByLastPushError(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLastPushError, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

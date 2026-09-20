@@ -411,14 +411,20 @@ func TestWorkerRetryBackoffTerminalFailureAndFailover(t *testing.T) {
 			}), metrics)
 			runner.clock = fixedClock{now: now}
 			err := runner.processJob(context.Background(), 0, asyncConfig(), workerJob(tt.attempts, tt.maxAttempts))
-			require.Error(t, err)
 			if tt.wantRetry {
+				require.Error(t, err)
 				require.Equal(t, 1, repo.retried)
 				require.Equal(t, now.Add(tt.wantBackoff), repo.retryAt)
 				require.Empty(t, payload.deleted)
 			} else {
-				require.Equal(t, 1, repo.failed)
-				require.Equal(t, tt.err.Code, repo.failedCode)
+				// 重试耗尽/不可重试 → 降级落库（消息必存），job 记 done
+				require.NoError(t, err)
+				require.Zero(t, repo.retried)
+				require.Zero(t, repo.failed)
+				require.Equal(t, 1, repo.completeCount)
+				require.True(t, repo.completedStore, "degraded persist forces storePass")
+				require.Equal(t, EventPass, repo.completedResult.Decision)
+				require.True(t, strings.HasPrefix(repo.completedResult.ScannerVersion, "scan_failed:"))
 				require.Equal(t, []int64{51}, payload.deleted)
 			}
 			snapshot := metrics.Snapshot()
@@ -445,6 +451,57 @@ func TestWorkerRetryBackoffTerminalFailureAndFailover(t *testing.T) {
 	runner := NewRunner(&fakeConfigStore{cfg: cfg, active: true}, repo, payload, scanner, metrics)
 	require.NoError(t, runner.processJob(context.Background(), 0, cfg, workerJob(1, 3)))
 	require.Equal(t, int64(1), metrics.Snapshot().Failovers)
+}
+
+func TestWorkerDegradesOnlyAfterRetryBudgetExhausted(t *testing.T) {
+	t.Run("retryable within budget retries instead of degrading", func(t *testing.T) {
+		repo := &fakeJobRepository{}
+		payload := &fakePayloadStore{values: map[int64]string{51: "abc"}}
+		runner := NewRunner(&fakeConfigStore{cfg: asyncConfig(), active: true}, repo, payload, PromptScannerFunc(func(context.Context, ActiveEndpoint, string, []string) (*NormalizedResult, error) {
+			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true}
+		}), NewAtomicMetrics())
+		require.Error(t, runner.processJob(context.Background(), 0, asyncConfig(), workerJob(1, 3)))
+		require.Equal(t, 1, repo.retried)
+		require.Zero(t, repo.completeCount)
+		require.Empty(t, payload.deleted)
+	})
+
+	t.Run("budget exhausted degrades with forced pass event", func(t *testing.T) {
+		repo := &fakeJobRepository{}
+		payload := &fakePayloadStore{values: map[int64]string{51: "abc"}}
+		runner := NewRunner(&fakeConfigStore{cfg: asyncConfig(), active: true}, repo, payload, PromptScannerFunc(func(context.Context, ActiveEndpoint, string, []string) (*NormalizedResult, error) {
+			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true}
+		}), NewAtomicMetrics())
+		require.NoError(t, runner.processJob(context.Background(), 0, asyncConfig(), workerJob(3, 3)))
+		require.Zero(t, repo.retried)
+		require.Zero(t, repo.failed)
+		require.Equal(t, 1, repo.completeCount)
+		require.True(t, repo.completedStore, "degraded persist forces storePass")
+		require.Equal(t, EventPass, repo.completedResult.Decision)
+		require.Equal(t, "degraded", repo.completedResult.ScannerBackend)
+		require.True(t, strings.HasPrefix(repo.completedResult.ScannerVersion, "scan_failed:"))
+		require.Equal(t, "priority", repo.completedResult.PolicyID)
+		require.Equal(t, []int64{51}, payload.deleted)
+	})
+
+	t.Run("partial chunk success keeps real findings with degraded marker", func(t *testing.T) {
+		repo := &fakeJobRepository{}
+		payload := &fakePayloadStore{values: map[int64]string{51: "abcdef"}}
+		calls := 0
+		runner := NewRunner(&fakeConfigStore{cfg: asyncConfig(), active: true}, repo, payload, PromptScannerFunc(func(context.Context, ActiveEndpoint, string, []string) (*NormalizedResult, error) {
+			calls++
+			if calls == 1 {
+				return &NormalizedResult{Decision: EventFlag, RiskLevel: RiskMedium, Action: ActionWarn, Safety: "Controversial", Categories: []string{"politically_sensitive_topics"}}, nil
+			}
+			return nil, &GuardError{Code: ErrorCodeInvalidResponse}
+		}), NewAtomicMetrics())
+		require.NoError(t, runner.processJob(context.Background(), 0, asyncConfig(), workerJob(1, 1)))
+		require.Equal(t, 2, calls)
+		require.Equal(t, EventFlag, repo.completedResult.Decision, "earlier chunk warn finding survives")
+		require.True(t, strings.HasPrefix(repo.completedResult.ScannerVersion, "scan_failed:"))
+		require.True(t, repo.completedStore)
+		require.Equal(t, []int64{51}, payload.deleted)
+	})
 }
 
 func TestWorkerPanicLeaseLossAndLifecycleAreContained(t *testing.T) {
@@ -558,11 +615,8 @@ func TestPromptAuditSyntheticAsyncBaseline(t *testing.T) {
 		job := &Job{ID: jobID, ClaimVersion: 1, Attempts: 1, MaxAttempts: 1, ConfigVersion: cfg.ConfigVersion,
 			Snapshot: PromptSnapshot{RequestID: fmt.Sprintf("baseline-%03d", index), PromptLength: len([]rune(text)), RedactedPreview: "synthetic"}}
 		err := runner.processJob(context.Background(), 0, cfg, job)
-		if index <= 98 {
-			require.NoError(t, err)
-		} else {
-			require.Error(t, err)
-		}
+		// index 99/100 扫描失败：重试预算（max=1）即刻耗尽 → 降级落库，返回 nil
+		require.NoError(t, err)
 	}
 
 	snapshot := metrics.Snapshot()
@@ -575,12 +629,12 @@ func TestPromptAuditSyntheticAsyncBaseline(t *testing.T) {
 	require.Equal(t, int64(1), snapshot.Timeouts)
 	require.Zero(t, knownBenignFindings)
 	require.Equal(t, 3, knownMaliciousBlocked)
-	require.Equal(t, 98, repo.completeCount)
-	require.Equal(t, 8, repo.eventCount, "store_pass_events=false only grows events for flag/block fixtures")
+	require.Equal(t, 100, repo.completeCount)
+	require.Equal(t, 10, repo.eventCount, "flag/block + 2 degraded (scan_failed forces storePass)")
 	require.Positive(t, snapshot.LatencyP50MS)
 	require.LessOrEqual(t, snapshot.LatencyP50MS, snapshot.LatencyP95MS)
 	require.LessOrEqual(t, snapshot.LatencyP95MS, snapshot.LatencyP99MS)
-	t.Logf("synthetic async baseline: p50=%dms p95=%dms p99=%dms failure_rate=2%% false_positive_rate=0%% event_growth=8/100", snapshot.LatencyP50MS, snapshot.LatencyP95MS, snapshot.LatencyP99MS)
+	t.Logf("synthetic async baseline: p50=%dms p95=%dms p99=%dms failure_rate=0%%(degraded-to-stored) false_positive_rate=0%% event_growth=10/100", snapshot.LatencyP50MS, snapshot.LatencyP95MS, snapshot.LatencyP99MS)
 }
 
 func TestRequestCloneOwnsMutableInputs(t *testing.T) {

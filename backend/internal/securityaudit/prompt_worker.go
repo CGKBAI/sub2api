@@ -165,15 +165,30 @@ func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig,
 				"error_code": guardErrorCode(scanErr), "status": "failed",
 			}))
 			r.observeAsyncFailure(scanErr, r.clock.Now().Sub(started))
-			// 消息必存：扫描失败时以降级结果落库（decision=pass），保证
-			// full_prompt 不因审计端点抖动而丢失。job 记为 done 避免无效重试。
+			// 可重试错误在重试预算内仍走 backoff 重试；重试耗尽或不可重试
+			// 才降级落库（消息必存），瞬时抖动不再导致消息永久免扫
+			var guardErr *GuardError
+			if errors.As(scanErr, &guardErr) && guardErr.Retryable && job.Attempts < job.MaxAttempts {
+				return r.finishFailure(ctx, job, scanErr)
+			}
+			// 降级结果：前面 chunk 已成功的聚合保留真实发现（如 warn），
+			// 仅附加 scan_failed 标记；无成功前缀时用纯 pass 兜底
+			degradedVersion := "scan_failed:" + guardErrorCode(scanErr)
 			fallback := &NormalizedResult{
 				Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow,
-				ScannerBackend: "qwen3guard-openai", Categories: []string{}, MatchedScanners: []string{},
+				ScannerBackend: "degraded", Categories: []string{}, MatchedScanners: []string{},
 				ScannerScores: map[string]float64{}, ScannerEvidence: map[string]string{},
+				PolicyID:       "priority", PolicyVersion: 1,
 				ChunkTotal:     len(chunks),
 				LatencyMS:      int(r.clock.Now().Sub(started).Milliseconds()),
-				ScannerVersion: "scan_failed:" + guardErrorCode(scanErr),
+				ScannerVersion: degradedVersion,
+			}
+			if len(results) > 0 {
+				if agg, aErr := AggregateResults(results, r.clock.Now().Sub(started)); aErr == nil {
+					agg.ChunkTotal = len(chunks)
+					agg.ScannerVersion = degradedVersion
+					fallback = agg
+				}
 			}
 			if _, cErr := r.repo.Complete(ctx, job, fallback, true); cErr != nil {
 				return r.finishFailure(ctx, job, scanErr)

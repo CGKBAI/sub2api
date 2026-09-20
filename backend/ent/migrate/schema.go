@@ -1515,6 +1515,8 @@ var (
 		{Name: "ai_summary", Type: field.TypeString, Default: "", SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "done"},
 		{Name: "error", Type: field.TypeString, Default: "", SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "pushed_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "last_push_error", Type: field.TypeString, Default: "", SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 	}
@@ -1533,11 +1535,6 @@ var (
 				Name:    "report_type_period_start",
 				Unique:  false,
 				Columns: []*schema.Column{ReportsColumns[2], ReportsColumns[3]},
-			},
-			{
-				Name:    "report_user_id_type_period_start",
-				Unique:  false,
-				Columns: []*schema.Column{ReportsColumns[1], ReportsColumns[2], ReportsColumns[3]},
 			},
 		},
 	}
