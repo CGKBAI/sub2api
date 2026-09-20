@@ -21,6 +21,10 @@ const reportLLMTimeout = 120 * time.Second
 // maxReportTurns 单次报告生成最多读取的请求条数（覆盖一天的量级）。
 const maxReportTurns = 300
 
+// reportDailyMinRequests 节假日感知关闭（skip_holidays=false）时定时日报的
+// 请求阈值：当日请求 ≤ 该值不生成（过滤低用量噪音）；手动生成不受限。
+const reportDailyMinRequests = 10
+
 // 报告对话窗口采样参数：快照按 session 分组拉取（每 session 取最全一条，最多
 // reportSnapshotCount 个 session）；全部窗口预算 conversationWindowBudget 按
 // session 数均分，单 session 不超过 conversationWindowsPerSnapCap 个窗口。
@@ -118,6 +122,11 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 	cfg, err := s.GetReportConfig(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// 节假日感知关闭模式：定时日报仅对当日请求超过阈值的用户生成
+	if belowDailyMinRequests(reportType, trigger, cfg.SkipHolidays, stats.Requests) {
+		return nil, ErrReportSkippedLowUsage
 	}
 
 	// 姓名进报告标题（如「工作日报（2026-09-15）- 谢翔宇」）
@@ -279,6 +288,14 @@ func (s *ReportService) PushUserReport(ctx context.Context, userID, reportID int
 
 // GenerateForAllUsers 为周期内所有活跃用户生成报告（scheduler / 管理端手动触发用）。
 // trigger 语义同 GenerateReport。返回成功生成的数量与首个错误。
+// belowDailyMinRequests 判断定时日报是否低于请求阈值（仅节假日感知关闭模式生效）。
+func belowDailyMinRequests(reportType string, trigger ReportTrigger, skipHolidays bool, requests int64) bool {
+	return trigger == ReportTriggerScheduled &&
+		reportType == domain.ReportTypeDaily &&
+		!skipHolidays &&
+		requests <= reportDailyMinRequests
+}
+
 func (s *ReportService) GenerateForAllUsers(ctx context.Context, reportType string, ref time.Time, trigger ReportTrigger) (int, error) {
 	if s == nil || s.reportRepo == nil {
 		return 0, errors.New("report repository not initialized")
@@ -298,7 +315,7 @@ func (s *ReportService) GenerateForAllUsers(ctx context.Context, reportType stri
 	for _, uid := range userIDs {
 		_, gErr := s.GenerateReport(ctx, uid, reportType, ref, trigger)
 		if gErr != nil {
-			if errors.Is(gErr, ErrReportGenerateUserNotFound) {
+			if errors.Is(gErr, ErrReportGenerateUserNotFound) || errors.Is(gErr, ErrReportSkippedLowUsage) {
 				continue
 			}
 			logger.LegacyPrintf("service.report",

@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-20（**v3.7 定时 19:00 + 法定节假日感知已上线生产 stable 33333**：三种报告 cron 统一 `0 19 * * *` 仅取时分，生成日由工作日规则决定（日报=工作日/周报=本周最后工作日/月报=当月首个工作日），`skip_holidays` 开关默认开，内置 2026 年节假日表，见 §8 v3.7）。
+> 本文档是完整项目上下文。最后更新：2026-09-20 晚（**v3.8 节假日感知页头开关 + 关模式语义已上线生产 stable 33333**：管理员一键切换；开=工作日规则（v3.7），关=日报每天（当日请求>10 条的用户）/周报周五/月报月底出当月，见 §8 v3.8；同日早些时候 v3.7 定时 19:00+节假日感知上线）。
 
 ## 1. 功能与当前状态总览
 
@@ -87,7 +87,7 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 |---|---|
 | `risk_control_enabled` | true |
 | `prompt_audit_config` | 异步审计（async，不阻断），审计节点：**MiniMax** `https://api.minimaxi.com` + `MiniMax-M2`（账号 id=5 的 key，AES-256-GCM 加密存 token_ciphertext，密钥=.env 的 TOTP_ENCRYPTION_KEY），input_limit=2000，timeout=15000ms |
-| `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=60，单条截断 800 字符，日报/周报/月报 cron 均 `0 19 * * *`（仅时分生效），skip_holidays=true（v3.7：生成日由工作日规则决定——日报=工作日、周报=本周最后工作日、月报=当月首个工作日生成上月；存量 JSON 缺字段时 cron 读取自动补默认，skip_holidays 缺省=false 需 SQL 显式写入） |
+| `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=60，单条截断 800 字符，日报/周报/月报 cron 均 `0 19 * * *`（仅时分生效），skip_holidays=true（**admin 报告页页头按钮运行时切换**；开=工作日规则，关=日报每天+当日请求>10 条阈值/周报周五/月报月底出当月；存量 JSON 缺字段时 cron 读取自动补默认，skip_holidays 缺省=false 需 SQL 或按钮显式写入） |
 
 配置修改：直接 UPDATE settings 表（ConfigManager 每 5 秒 TTL reload，无需重启）；endpoint token 必须先用 TOTP_ENCRYPTION_KEY 做 AES-256-GCM 加密（base64(nonce+ct+tag)，node crypto 可做）。
 
@@ -222,6 +222,16 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 - [x] 发布顺序关键：**先 stable 镜像后 SQL**（旧代码吃到 daily-fire cron 会天天生成）；SQL `value=(value::jsonb||'{...}')::text` 写入新 cron ×3 + skip_holidays=true，5s 热加载；Redis 预置 `last_gen:weekly=9/18 20:10`、`last_gen:monthly=9/1 20:20`（旧 last_run 已在 24h TTL 时代过期，否则升级当晚周报/月报会重复补发）
 - [x] 验证：go build/vet + holiday 全部 + service Report 全绿 + vue-tsc EXIT=0（/tmp 隔离 pnpm@9）→ buildx dev → 33336 冒烟（healthy/HTTP 200/无 panic/二进制含新逻辑与 i18n key）→ stable 33333 发布（healthy/HTTP 200）→ SQL 生效（4 字段确认）→ commit + push fork
 - 上线当日语义核对（2026-09-20 周日调休补班）：19:00 日报生成+推送；周报/月报 skip 留日志；下个节点=周报 9/24（周四，9/25 中秋）、9 月月报 10/8（国庆后首个工作日）
+
+### v3.8：节假日感知页头开关 + 关模式语义（2026-09-20 晚已上线）
+
+> 背景：用户要求把节假日感知做成管理员按钮，并明确关闭时的语义。决策：**开**=v3.7 工作日规则不变；**关**=日报每天发（仅当日请求 >10 条的用户，定时路径）、周报固定周五（错过当晚可在周末补发）、月报每月最后一天出当月（不跨月补，可手动补）。
+
+- [x] `report_scheduler.go`：`reportDueForDay` 加 `skipHolidays` 参数双模式分支；关模式周报=本周五 0 点起 + genMarker 本周去重/catch-up（与开模式同构），月报=`isLastCalendarDayOfMonth`（**不查 genMarker**——开模式 marker 表示"上月已出"、关模式表示"当月已出"，语义冲突，跨模式切换当月可能重复出一次月报，已知边缘）；月报 ref 模式相关：开=上月 1 日、关=now（月底出当月）
+- [x] 日报阈值：`reportDailyMinRequests=10` + 纯函数 `belowDailyMinRequests`（仅 scheduled+daily+关模式+≤10 生效），`GenerateReport` 在 stats 后返回哨兵 `ErrReportSkippedLowUsage`，`GenerateForAllUsers` 循环静默跳过；手动生成/周报/月报不受限
+- [x] 前端：admin ReportsView 页头新增「节假日感知：开/关」按钮（onMounted getConfig 初始化，点击 updateConfig 单字段切换，title 悬浮显示两模式规则）；设置弹窗移除 checkbox 改为 `scheduleHint` 静态说明（cron 仅时分生效）；`autoPushHint` 改模式中性文案；i18n zh/en（actions.holidayAwareOn/Off/Hint/holidayToggled + config.scheduleHint）
+- [x] 测试：规则用例扩到 33（关模式 12 例：周末/节假日日报照发、周五、错过补发、去重、9/30 与 2/28 月底、不跨月补）+ `belowDailyMinRequests` 7 例全绿
+- [x] 验证：go build/vet/test + vue-tsc EXIT=0 → buildx dev → 33336 冒烟（healthy/HTTP 200/无 panic/admin chunk 含 holidayAwareHint）→ stable 33333 发布（healthy/HTTP 200；无 SQL——开关由按钮运行时切换，生产当前=开）→ commit + push fork
 
 ### 后续迭代
 

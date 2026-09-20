@@ -57,9 +57,10 @@ return 0
 // ReportSchedulerService 后台定时生成日报/周报/月报。
 //
 // 每分钟 tick 一次，按配置里的 cron 表达式（默认每日 19:00 评估一次）触发；
-// skip_holidays=true 时 cron 仅取时分，生成日由工作日规则决定：
-// 日报=每个工作日、周报=本周最后一个工作日、月报=本月第一个工作日（生成上月）；
-// Redis leader lock 保证多实例（灰度并行）只有一个实例执行；
+// cron 仅取时分，生成日由 reportDueForDay 规则决定：
+// skip_holidays=true（默认，节假日感知）：日报=工作日、周报=本周最后工作日、
+// 月报=本月首个工作日（出上月）；false：日报=每天（请求阈值过滤）、周报=周五、
+// 月报=每月最后一天出当月。Redis leader lock 保证多实例只有一个实例执行；
 // REPORT_SCHEDULER_ENABLED=false 可整体禁用（canary 用）。
 type ReportSchedulerService struct {
 	reportService *ReportService
@@ -217,19 +218,21 @@ func (s *ReportSchedulerService) runOnce() {
 		// 先标记已评估，避免跳过/失败后每分钟重触发
 		s.setLastRunAt(ctx, d.kind, now)
 
-		// 节假日感知：cron 只决定触发时刻，生成日由工作日规则决定
-		if cfg.SkipHolidays && !reportDueForDay(d.kind, now, s.getGenMarkerAt(ctx, d.kind)) {
+		// 生成日规则：开（skip_holidays=true）=工作日规则；关=日报每天、周报周五、月报月底
+		if !reportDueForDay(d.kind, now, s.getGenMarkerAt(ctx, d.kind), cfg.SkipHolidays) {
 			logger.LegacyPrintf("service.report",
-				"[ReportScheduler] skip %s on %s (not a report workday)", d.kind, now.Format("2006-01-02"))
+				"[ReportScheduler] skip %s on %s (not a report day, skip_holidays=%v)",
+				d.kind, now.Format("2006-01-02"), cfg.SkipHolidays)
 			continue
 		}
 
-		// 记录实际生成标记（skip_holidays 的本周/本月去重依据）
+		// 记录实际生成标记（周报的本周去重与 catch-up 依据）
 		s.setLastGenAt(ctx, d.kind, now)
 
-		// 月报语义为「ref 所在自然月」，定时生成上月：ref 传上月 1 日
+		// 月报语义为「ref 所在自然月」：开=当月首个工作日出上月（ref 传上月 1 日）；
+		// 关=每月最后一天出当月（ref=now 所在月）
 		ref := now
-		if d.reportType == domain.ReportTypeMonthly {
+		if d.reportType == domain.ReportTypeMonthly && cfg.SkipHolidays {
 			ref = timezone.StartOfMonth(now).AddDate(0, -1, 0)
 		}
 
@@ -243,21 +246,34 @@ func (s *ReportSchedulerService) runOnce() {
 	}
 }
 
-// reportDueForDay 判断当前评估时刻是否为该类型报告的生成日（skip_holidays=true 时使用）。
-// 日报=每个工作日；周报=本周（周一~周日）最后一个工作日，整周全假则该周不出；
-// 月报=本月第一个工作日。genMarker 为本周/本月上次实际生成时间（零值=从未生成），
-// 用于错过触发时刻后的 catch-up 与同一周期去重。
-func reportDueForDay(kind string, now, genMarker time.Time) bool {
+// reportDueForDay 判断当前评估时刻是否为该类型报告的生成日。genMarker 为本周
+// 上次实际生成时间（零值=从未生成），用于错过触发时刻后的 catch-up 与同周期去重。
+//
+// skip_holidays=true（节假日感知，默认）：日报=每个工作日；周报=本周（周一~周日）
+// 最后一个工作日，整周全假则该周不出；月报=本月第一个工作日（出上月）。
+// skip_holidays=false：日报=每天（低用量用户由请求阈值过滤）；周报=固定周五
+//（错过当晚可在周末补发）；月报=每月最后一天出当月（错过不跨月补，可手动补）。
+func reportDueForDay(kind string, now, genMarker time.Time, skipHolidays bool) bool {
 	switch kind {
 	case "daily":
+		if !skipHolidays {
+			return true
+		}
 		return holiday.IsWorkday(now)
 	case "weekly":
+		if !skipHolidays {
+			friday := timezone.StartOfWeek(now).AddDate(0, 0, 4)
+			return !now.Before(friday) && genMarker.Before(timezone.StartOfWeek(now))
+		}
 		last := holiday.LastWorkdayOfWeek(now)
 		if last.IsZero() {
 			return false
 		}
 		return !now.Before(last) && genMarker.Before(timezone.StartOfWeek(now))
 	case "monthly":
+		if !skipHolidays {
+			return isLastCalendarDayOfMonth(now)
+		}
 		first := holiday.FirstWorkdayOfMonth(now)
 		if first.IsZero() {
 			return false
@@ -265,6 +281,11 @@ func reportDueForDay(kind string, now, genMarker time.Time) bool {
 		return !now.Before(first) && genMarker.Before(timezone.StartOfMonth(now))
 	}
 	return false
+}
+
+// isLastCalendarDayOfMonth 判断是否为自然月最后一天（不看节假日，关模式月报用）。
+func isLastCalendarDayOfMonth(t time.Time) bool {
+	return t.AddDate(0, 0, 1).Month() != t.Month()
 }
 
 // =========================

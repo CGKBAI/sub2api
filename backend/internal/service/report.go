@@ -97,4 +97,6 @@ const (
 
 var (
 	ErrReportGenerateUserNotFound = infraerrors.BadRequest("REPORT_USER_NOT_FOUND", "no usage found for this user in the period")
+	// 节假日感知关闭时的日报请求阈值过滤（GenerateForAllUsers 循环静默跳过）
+	ErrReportSkippedLowUsage = infraerrors.BadRequest("REPORT_BELOW_MIN_REQUESTS", "daily report skipped: requests below threshold")
 )

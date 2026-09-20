@@ -21,7 +21,12 @@ export default {
       pushing: '发送中…',
       pushSuccess: '已推送到飞书群',
       autoPush: '参与飞书自动推送',
-      autoPushHint: '仅作用于定时生成的报告（工作日 19:00 日报、每周最后工作日 19:00 周报、每月首个工作日 19:00 月报，自动避开法定节假日）；手动生成的报告不自动推送，可点卡片按钮手动发送'
+      autoPushHint: '仅作用于定时生成的报告（生成时刻与日期规则见页头「节假日感知」开关）；手动生成的报告不自动推送，可点卡片按钮手动发送',
+      holidayAwareOn: '节假日感知：开',
+      holidayAwareOff: '节假日感知：关',
+      holidayAwareHint:
+        '开：日报=每个工作日、周报=本周最后一个工作日、月报=当月第一个工作日（出上月），自动规避法定节假日与周末（调休补班日照常）。关：日报=每天（仅当日请求超过 10 条的用户）、周报=固定周五、月报=每月最后一天出当月。 cron 只决定当天生成时刻（默认 19:00）',
+      holidayToggled: '节假日感知已切换',
     },
     stats: {
       requests: '请求',
@@ -58,10 +63,8 @@ export default {
       truncateChars: '单条 prompt 截断字符数',
       dailySchedule: '日报 cron（仅时分生效）',
       weeklySchedule: '周报 cron（仅时分生效）',
-      monthlySchedule: '月报 cron（仅时分生效，生成上月）',
-      skipHolidays: '规避法定节假日（含调休补班）',
-      skipHolidaysHint:
-        '开启后生成日由工作日规则决定：日报=每个工作日、周报=本周最后一个工作日、月报=当月第一个工作日（生成上月），cron 仅决定当天生成时刻；关闭则逢 cron 触发即生成。次年安排公布并内置前，按「仅避开周末」回退',
+      monthlySchedule: '月报 cron（仅时分生效）',
+      scheduleHint: '三个 cron 仅「时 分」生效，每天在该时刻评估一次；生成日期规则由页头「节假日感知」开关决定',
       feishuSection: '飞书推送',
       feishuDescription: '通过群自定义机器人 Webhook 把报告卡片推送到飞书群；在飞书群「设置 → 群机器人 → 添加自定义机器人」获取。',
       feishuEnabled: '启用飞书推送',

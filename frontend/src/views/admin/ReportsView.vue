@@ -54,6 +54,34 @@ const generatingAll = ref(false)
 const generatingUserId = ref<number | null>(null)
 const pushingReportId = ref<number | null>(null)
 
+// 节假日感知开关（页头按钮）：
+// 开=日报工作日/周报本周最后工作日/月报当月首个工作日出上月；
+// 关=日报每天（当日请求超阈值的用户）/周报周五/月报月底出当月
+const holidayAware = ref(true)
+const togglingHoliday = ref(false)
+
+async function loadHolidayAware() {
+  try {
+    const cfg = await reportsAPI.getConfig()
+    holidayAware.value = cfg.skip_holidays
+  } catch {
+    // 读取失败保持默认展示，切换时以后端返回为准
+  }
+}
+
+async function toggleHolidayAware() {
+  togglingHoliday.value = true
+  try {
+    const cfg = await reportsAPI.updateConfig({ skip_holidays: !holidayAware.value })
+    holidayAware.value = cfg.skip_holidays
+    appStore.showSuccess(t('admin.reports.actions.holidayToggled'))
+  } catch (error: any) {
+    appStore.showError(error?.message || String(error))
+  } finally {
+    togglingHoliday.value = false
+  }
+}
+
 async function pushToFeishu(report: Report) {
   pushingReportId.value = report.id
   try {
@@ -95,7 +123,10 @@ watch([activeTab, dailyDate, weeklyDate, monthlyDate, userIdFilter], () => {
   load()
 })
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadHolidayAware()
+})
 
 async function generateAll() {
   generatingAll.value = true
@@ -231,6 +262,15 @@ const statusBadge = computed(() => (status: string) => {
             @click="load"
           >
             {{ t('admin.reports.filters.refresh') }}
+          </button>
+          <button
+            class="btn text-sm"
+            :class="holidayAware ? 'btn-primary' : 'btn-secondary'"
+            :disabled="togglingHoliday"
+            :title="t('admin.reports.actions.holidayAwareHint')"
+            @click="toggleHolidayAware"
+          >
+            {{ holidayAware ? t('admin.reports.actions.holidayAwareOn') : t('admin.reports.actions.holidayAwareOff') }}
           </button>
           <button class="btn btn-secondary text-sm" @click="openSettings">
             {{ t('admin.reports.actions.settings') }}
@@ -454,16 +494,9 @@ const statusBadge = computed(() => (status: string) => {
             </div>
           </div>
 
-          <!-- 节假日感知 -->
-          <div class="space-y-2 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
-              <input v-model="configForm.skip_holidays" type="checkbox" class="checkbox" />
-              {{ t('admin.reports.config.skipHolidays') }}
-            </label>
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.reports.config.skipHolidaysHint') }}
-            </p>
-          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.reports.config.scheduleHint') }}
+          </p>
 
           <!-- 飞书推送 -->
           <div class="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">

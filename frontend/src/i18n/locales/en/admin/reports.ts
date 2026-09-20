@@ -23,7 +23,12 @@ export default {
       pushSuccess: 'Pushed to Feishu group',
       autoPush: 'Join Feishu auto push',
       autoPushHint:
-        'Applies only to scheduled reports (daily 19:00 on workdays, weekly on the last workday, monthly on the first workday, skipping statutory holidays); manually generated reports are never auto-pushed — use the card button to send'
+        'Applies only to scheduled reports (times & date rules follow the "Holiday awareness" toggle in the header); manually generated reports are never auto-pushed — use the card button to send',
+      holidayAwareOn: 'Holiday awareness: on',
+      holidayAwareOff: 'Holiday awareness: off',
+      holidayAwareHint:
+        'On: daily = every workday, weekly = last workday of the week, monthly = first workday of the month (previous month), skipping statutory holidays and weekends (adjusted workdays included). Off: daily = every day (only users with more than 10 requests that day), weekly = fixed Friday, monthly = last calendar day of the month (current month). The cron decides the time of day only (default 19:00)',
+      holidayToggled: 'Holiday awareness toggled',
     },
     stats: {
       requests: 'Requests',
@@ -61,10 +66,9 @@ export default {
       truncateChars: 'Truncate each prompt to characters',
       dailySchedule: 'Daily cron (hour & minute only)',
       weeklySchedule: 'Weekly cron (hour & minute only)',
-      monthlySchedule: 'Monthly cron (hour & minute only, previous month)',
-      skipHolidays: 'Skip weekends & statutory holidays (incl. adjusted workdays)',
-      skipHolidaysHint:
-        'When on, the generation day follows workday rules: daily = every workday, weekly = last workday of the week, monthly = first workday of the month; the cron decides the time of day only. When off, reports generate on every cron trigger. Falls back to weekends-only until next year\'s schedule is built in',
+      monthlySchedule: 'Monthly cron (hour & minute only)',
+      scheduleHint:
+        'All three crons use hour & minute only, evaluated once per day; the generation-day rules are controlled by the "Holiday awareness" toggle in the header',
       feishuSection: 'Feishu Push',
       feishuDescription:
         'Push report cards to a Feishu group via custom bot webhook. Get one in Feishu: group settings → bots → add custom bot.',
