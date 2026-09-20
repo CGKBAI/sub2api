@@ -49413,6 +49413,7 @@ type UserMutation struct {
 	rpm_limit                     *int
 	addrpm_limit                  *int
 	report_push_enabled           *bool
+	report_goal                   *string
 	clearedFields                 map[string]struct{}
 	api_keys                      map[int64]struct{}
 	removedapi_keys               map[int64]struct{}
@@ -50691,6 +50692,42 @@ func (m *UserMutation) ResetReportPushEnabled() {
 	m.report_push_enabled = nil
 }
 
+// SetReportGoal sets the "report_goal" field.
+func (m *UserMutation) SetReportGoal(s string) {
+	m.report_goal = &s
+}
+
+// ReportGoal returns the value of the "report_goal" field in the mutation.
+func (m *UserMutation) ReportGoal() (r string, exists bool) {
+	v := m.report_goal
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReportGoal returns the old "report_goal" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldReportGoal(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReportGoal is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReportGoal requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReportGoal: %w", err)
+	}
+	return oldValue.ReportGoal, nil
+}
+
+// ResetReportGoal resets all changes to the "report_goal" field.
+func (m *UserMutation) ResetReportGoal() {
+	m.report_goal = nil
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by ids.
 func (m *UserMutation) AddAPIKeyIDs(ids ...int64) {
 	if m.api_keys == nil {
@@ -51427,7 +51464,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 26)
+	fields := make([]string, 0, 27)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -51506,6 +51543,9 @@ func (m *UserMutation) Fields() []string {
 	if m.report_push_enabled != nil {
 		fields = append(fields, user.FieldReportPushEnabled)
 	}
+	if m.report_goal != nil {
+		fields = append(fields, user.FieldReportGoal)
+	}
 	return fields
 }
 
@@ -51566,6 +51606,8 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.RpmLimit()
 	case user.FieldReportPushEnabled:
 		return m.ReportPushEnabled()
+	case user.FieldReportGoal:
+		return m.ReportGoal()
 	}
 	return nil, false
 }
@@ -51627,6 +51669,8 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldRpmLimit(ctx)
 	case user.FieldReportPushEnabled:
 		return m.OldReportPushEnabled(ctx)
+	case user.FieldReportGoal:
+		return m.OldReportGoal(ctx)
 	}
 	return nil, fmt.Errorf("unknown User field %s", name)
 }
@@ -51817,6 +51861,13 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetReportPushEnabled(v)
+		return nil
+	case user.FieldReportGoal:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReportGoal(v)
 		return nil
 	}
 	return fmt.Errorf("unknown User field %s", name)
@@ -52058,6 +52109,9 @@ func (m *UserMutation) ResetField(name string) error {
 		return nil
 	case user.FieldReportPushEnabled:
 		m.ResetReportPushEnabled()
+		return nil
+	case user.FieldReportGoal:
+		m.ResetReportGoal()
 		return nil
 	}
 	return fmt.Errorf("unknown User field %s", name)

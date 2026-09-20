@@ -938,6 +938,7 @@ func userEntityToService(u *dbent.User) *service.User {
 		TotalRecharged:             u.TotalRecharged,
 		RPMLimit:                   u.RpmLimit,
 		ReportPushEnabled:          u.ReportPushEnabled,
+		ReportGoal:                 u.ReportGoal,
 		CreatedAt:                  u.CreatedAt,
 		UpdatedAt:                  u.UpdatedAt,
 		DeletedAt:                  u.DeletedAt,

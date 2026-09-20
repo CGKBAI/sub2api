@@ -58,6 +58,9 @@ type User struct {
 	// 报告飞书推送：false 时该用户的报告生成成功后不自动推送到飞书群。
 	ReportPushEnabled bool
 
+	// 日报近期目标：用户自行填写，仅日报生成时读取注入 LLM 上下文。
+	ReportGoal string
+
 	// RPMLimit 用户级每分钟请求数上限（0 = 不限制）。仅在所用分组未设置 rpm_limit
 	// 且该 (用户, 分组) 无 rpm_override 时作为全局兜底生效，计数键 rpm:u:{userID}:{min}。
 	RPMLimit int

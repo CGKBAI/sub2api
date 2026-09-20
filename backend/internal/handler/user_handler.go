@@ -82,6 +82,7 @@ type UpdateProfileRequest struct {
 	BalanceNotifyEnabled   *bool    `json:"balance_notify_enabled"`
 	BalanceNotifyThreshold *float64 `json:"balance_notify_threshold"`
 	ReportPushEnabled      *bool    `json:"report_push_enabled"`
+	ReportGoal             *string  `json:"report_goal"`
 }
 
 type userProfileResponse struct {
@@ -180,6 +181,7 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 		BalanceNotifyEnabled:   req.BalanceNotifyEnabled,
 		BalanceNotifyThreshold: req.BalanceNotifyThreshold,
 		ReportPushEnabled:      req.ReportPushEnabled,
+		ReportGoal:             req.ReportGoal,
 	}
 	updatedUser, err := h.userService.UpdateProfile(c.Request.Context(), subject.UserID, svcReq)
 	if err != nil {

@@ -95,6 +95,7 @@ export interface User {
   balance_notify_threshold: number | null
   balance_notify_extra_emails: NotifyEmailEntry[]
   report_push_enabled?: boolean // 报告飞书自动推送参与开关（默认 true）
+  report_goal?: string // 日报近期目标（用户自行填写，仅日报生成时读取）
   subscriptions?: UserSubscription[] // User's active subscriptions
   last_active_at?: string | null
   created_at: string

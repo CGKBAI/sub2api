@@ -36,6 +36,15 @@ export default {
     summary: { title: 'AI Summary', empty: 'No AI summary (LLM not configured or no prompts in this period)' },
     status: { pending: 'Pending', done: 'Done', failed: 'Failed' },
     push: { pushed: 'Pushed', pushFailed: 'Push failed' },
+    goal: {
+      title: 'Recent Goals',
+      placeholder:
+        'List the projects you aim to complete soon, e.g. ship feature X. The daily report will include a "Recent Goals Plan" section built around these goals',
+      hint: 'Read by daily report generation only; weekly/monthly reports inherit via daily summaries. Takes effect from the next generation after saving',
+      save: 'Save goals',
+      saving: 'Saving…',
+      saved: 'Goals saved'
+    },
     empty: 'No reports under current filters',
     config: {
       title: 'AI Summary Settings',

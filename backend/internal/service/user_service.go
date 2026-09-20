@@ -113,6 +113,8 @@ type UserUpdateFields struct {
 	BalanceNotifyExtraEmails bool
 	// ReportPushEnabled 覆盖 report_push_enabled 列。
 	ReportPushEnabled bool
+	// ReportGoal 覆盖 report_goal 列（日报近期目标）。
+	ReportGoal bool
 	// AllowedGroups 为 true 时才同步 user_allowed_groups 关联表。
 	AllowedGroups bool
 	// RestrictPublicGroups 覆盖 restrict_public_groups 列。
@@ -253,6 +255,18 @@ const (
 	userIdentityNoteBindAnotherBeforeUnbind = "profile.authBindings.notes.bindAnotherBeforeUnbind"
 )
 
+// maxReportGoalRunes 日报近期目标文本的长度上限（rune）。
+const maxReportGoalRunes = 2000
+
+// normalizeReportGoal 规范化用户填写的日报近期目标：去首尾空白，超长截断。
+func normalizeReportGoal(s string) string {
+	s = strings.TrimSpace(s)
+	if runes := []rune(s); len(runes) > maxReportGoalRunes {
+		s = string(runes[:maxReportGoalRunes])
+	}
+	return s
+}
+
 // UpdateProfileRequest 更新用户资料请求
 type UpdateProfileRequest struct {
 	Email                  *string  `json:"email"`
@@ -262,6 +276,7 @@ type UpdateProfileRequest struct {
 	BalanceNotifyEnabled   *bool    `json:"balance_notify_enabled"`
 	BalanceNotifyThreshold *float64 `json:"balance_notify_threshold"`
 	ReportPushEnabled      *bool    `json:"report_push_enabled"`
+	ReportGoal             *string  `json:"report_goal"`
 }
 
 type UserAvatar struct {
@@ -557,6 +572,11 @@ func (s *UserService) updateProfile(ctx context.Context, userID int64, req Updat
 	if req.ReportPushEnabled != nil {
 		user.ReportPushEnabled = *req.ReportPushEnabled
 		fields.ReportPushEnabled = true
+	}
+
+	if req.ReportGoal != nil {
+		user.ReportGoal = normalizeReportGoal(*req.ReportGoal)
+		fields.ReportGoal = true
 	}
 
 	if err := s.userRepo.Update(ctx, user, fields); err != nil {

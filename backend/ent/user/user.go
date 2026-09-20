@@ -67,6 +67,8 @@ const (
 	FieldRpmLimit = "rpm_limit"
 	// FieldReportPushEnabled holds the string denoting the report_push_enabled field in the database.
 	FieldReportPushEnabled = "report_push_enabled"
+	// FieldReportGoal holds the string denoting the report_goal field in the database.
+	FieldReportGoal = "report_goal"
 	// EdgeAPIKeys holds the string denoting the api_keys edge name in mutations.
 	EdgeAPIKeys = "api_keys"
 	// EdgeRedeemCodes holds the string denoting the redeem_codes edge name in mutations.
@@ -224,6 +226,7 @@ var Columns = []string{
 	FieldTotalRecharged,
 	FieldRpmLimit,
 	FieldReportPushEnabled,
+	FieldReportGoal,
 }
 
 var (
@@ -300,6 +303,8 @@ var (
 	DefaultRpmLimit int
 	// DefaultReportPushEnabled holds the default value on creation for the "report_push_enabled" field.
 	DefaultReportPushEnabled bool
+	// DefaultReportGoal holds the default value on creation for the "report_goal" field.
+	DefaultReportGoal string
 )
 
 // OrderOption defines the ordering options for the User queries.
@@ -438,6 +443,11 @@ func ByRpmLimit(opts ...sql.OrderTermOption) OrderOption {
 // ByReportPushEnabled orders the results by the report_push_enabled field.
 func ByReportPushEnabled(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldReportPushEnabled, opts...).ToFunc()
+}
+
+// ByReportGoal orders the results by the report_goal field.
+func ByReportGoal(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldReportGoal, opts...).ToFunc()
 }
 
 // ByAPIKeysCount orders the results by api_keys count.

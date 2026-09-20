@@ -185,6 +185,11 @@ func ReportPushEnabled(v bool) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldReportPushEnabled, v))
 }
 
+// ReportGoal applies equality check predicate on the "report_goal" field. It's identical to ReportGoalEQ.
+func ReportGoal(v string) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldReportGoal, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldCreatedAt, v))
@@ -1413,6 +1418,71 @@ func ReportPushEnabledEQ(v bool) predicate.User {
 // ReportPushEnabledNEQ applies the NEQ predicate on the "report_push_enabled" field.
 func ReportPushEnabledNEQ(v bool) predicate.User {
 	return predicate.User(sql.FieldNEQ(FieldReportPushEnabled, v))
+}
+
+// ReportGoalEQ applies the EQ predicate on the "report_goal" field.
+func ReportGoalEQ(v string) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldReportGoal, v))
+}
+
+// ReportGoalNEQ applies the NEQ predicate on the "report_goal" field.
+func ReportGoalNEQ(v string) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldReportGoal, v))
+}
+
+// ReportGoalIn applies the In predicate on the "report_goal" field.
+func ReportGoalIn(vs ...string) predicate.User {
+	return predicate.User(sql.FieldIn(FieldReportGoal, vs...))
+}
+
+// ReportGoalNotIn applies the NotIn predicate on the "report_goal" field.
+func ReportGoalNotIn(vs ...string) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldReportGoal, vs...))
+}
+
+// ReportGoalGT applies the GT predicate on the "report_goal" field.
+func ReportGoalGT(v string) predicate.User {
+	return predicate.User(sql.FieldGT(FieldReportGoal, v))
+}
+
+// ReportGoalGTE applies the GTE predicate on the "report_goal" field.
+func ReportGoalGTE(v string) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldReportGoal, v))
+}
+
+// ReportGoalLT applies the LT predicate on the "report_goal" field.
+func ReportGoalLT(v string) predicate.User {
+	return predicate.User(sql.FieldLT(FieldReportGoal, v))
+}
+
+// ReportGoalLTE applies the LTE predicate on the "report_goal" field.
+func ReportGoalLTE(v string) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldReportGoal, v))
+}
+
+// ReportGoalContains applies the Contains predicate on the "report_goal" field.
+func ReportGoalContains(v string) predicate.User {
+	return predicate.User(sql.FieldContains(FieldReportGoal, v))
+}
+
+// ReportGoalHasPrefix applies the HasPrefix predicate on the "report_goal" field.
+func ReportGoalHasPrefix(v string) predicate.User {
+	return predicate.User(sql.FieldHasPrefix(FieldReportGoal, v))
+}
+
+// ReportGoalHasSuffix applies the HasSuffix predicate on the "report_goal" field.
+func ReportGoalHasSuffix(v string) predicate.User {
+	return predicate.User(sql.FieldHasSuffix(FieldReportGoal, v))
+}
+
+// ReportGoalEqualFold applies the EqualFold predicate on the "report_goal" field.
+func ReportGoalEqualFold(v string) predicate.User {
+	return predicate.User(sql.FieldEqualFold(FieldReportGoal, v))
+}
+
+// ReportGoalContainsFold applies the ContainsFold predicate on the "report_goal" field.
+func ReportGoalContainsFold(v string) predicate.User {
+	return predicate.User(sql.FieldContainsFold(FieldReportGoal, v))
 }
 
 // HasAPIKeys applies the HasEdge predicate on the "api_keys" edge.

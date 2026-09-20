@@ -380,6 +380,19 @@ func (s *ReportService) buildSummary(
 	var userPrompt strings.Builder
 	userPrompt.WriteString(fmt.Sprintf("周期：%s ~ %s\n", start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04")))
 
+	// 日报读取用户自行填写的近期目标（users.report_goal）：非空时注入上下文，
+	// 供「明日工作计划」围绕目标拆解（读取失败降级为无目标生成，不阻断报告）。
+	// 周报/月报聚合日报摘要时目标已自然继承，不直接读取。
+	if reportType == domain.ReportTypeDaily {
+		goal, gErr := s.reportRepo.GetReportGoal(ctx, userID)
+		if gErr != nil {
+			logger.LegacyPrintf("service.report", "[Report] fetch report goal for user %d: %v", userID, gErr)
+		} else if goal = strings.TrimSpace(goal); goal != "" {
+			userPrompt.WriteString("\n### 用户近期目标（用户自行填写，制定计划时必须对齐）\n")
+			userPrompt.WriteString(goal + "\n")
+		}
+	}
+
 	aggregated := false
 	switch reportType {
 	case domain.ReportTypeWeekly:
@@ -686,11 +699,15 @@ func reportSystemPrompt(reportType string) string {
 		b.WriteString("## 二、下月工作计划\n")
 		b.WriteString("1. <从本月工作自然延伸的方向>（1-4 条）\n")
 	default:
-		b.WriteString("输出格式（日报。只输出以下两个小节，禁止输出标题或其他小节）：\n")
+		b.WriteString("输出格式（日报。除下述小节外禁止输出标题或其他小节）：\n")
 		b.WriteString("## 一、今日核心工作\n")
 		b.WriteString("1. <今日工作项>（3-6 条，按重要性排序）\n\n")
 		b.WriteString("## 二、明日工作计划\n")
-		b.WriteString("1. <从今日工作自然延伸的下一步>（1-4 条，依据工作脉络推断；无法推断时写当前工作的延续推进项）\n")
+		b.WriteString("1. <从今日工作自然延伸的下一步>（1-4 条，依据工作脉络推断；无法推断时写当前工作的延续推进项）\n\n")
+		b.WriteString("若素材包含「用户近期目标」（用户自行设定的近期工作目标），必须额外输出第三节，把目标在报告中单独成节呈现：\n")
+		b.WriteString("## 三、近期目标计划\n")
+		b.WriteString("1. <围绕用户近期目标拆解的具体推进项>（1-6 条；目标涉及多个项目时分别列出，每条一句话动词开头：完成/推进/启动/上线）\n")
+		b.WriteString("第三节条目必须来自用户目标与实际素材的结合：已在推进的目标写下一步推进安排，尚未开始的目标写启动计划；「今日核心工作」中与目标相关的工作可标注对目标的推进，「明日工作计划」不再重复目标内容。未提供「用户近期目标」时严禁输出第三节。\n")
 	}
 	return b.String()
 }

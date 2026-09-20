@@ -2280,6 +2280,10 @@ func init() {
 	userDescReportPushEnabled := userFields[22].Descriptor()
 	// user.DefaultReportPushEnabled holds the default value on creation for the report_push_enabled field.
 	user.DefaultReportPushEnabled = userDescReportPushEnabled.Default.(bool)
+	// userDescReportGoal is the schema descriptor for report_goal field.
+	userDescReportGoal := userFields[23].Descriptor()
+	// user.DefaultReportGoal holds the default value on creation for the report_goal field.
+	user.DefaultReportGoal = userDescReportGoal.Default.(string)
 	userallowedgroupFields := schema.UserAllowedGroup{}.Fields()
 	_ = userallowedgroupFields
 	// userallowedgroupDescCreatedAt is the schema descriptor for created_at field.

@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-20（**v3.5 健壮性修复已上线生产 stable 33333**：调度器补丁 + 审计降级重试兜底 + 推送状态落库 + 重生成不覆盖好报告，见 §8 v3.5）。
+> 本文档是完整项目上下文。最后更新：2026-09-20（**v3.6 日报近期目标已上线生产 stable 33333**：用户在报告页自行维护「近期目标」，日报生成时读取并输出独立「三、近期目标计划」小节，见 §8 v3.6）。
 
 ## 1. 功能与当前状态总览
 
@@ -196,6 +196,18 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 - [x] 验证：go build/vet 全绿 + securityaudit 全绿 + service(Report|Feishu) 全绿 + **repository 全套首次全绿** + vue-tsc 全量 EXIT=0（/tmp 隔离 pnpm@9 流程）→ buildx dev → 33336 冒烟（healthy/HTTP 200/无 panic/迁移 237 生效/两个 ReportsView chunk 均含 pushFailed 特征）
 - [x] 用户浏览器验证 33336 通过（手动推送一张卡片到飞书正常、报告页正常）→ stable 33333 发布 → commit + push fork
 - 坑位记录：①容器 codegen 以 root 写文件导致后续 git 操作 Permission denied，需 `docker run --rm -v ...:/app alpine chown -R 1015:1008 /app/ent` 修属主；②`git checkout -- backend/ent` 会连手写的 ent/schema/*.go 一起还原，恢复现场后需重放 schema 编辑再重新 generate；③以 `--user 1015:1008` 跑 go generate 会写出损坏文件（GEN=1 内容错乱），**保持 root 运行 + 事后 chown** 的既定流程
+
+### v3.6：日报「近期目标」（2026-09-20 已上线）
+
+> 背景：用户希望在报告页自行维护近期要完成的项目目标，生成日报时体现——目标单独成节而非仅融入计划小节。决策（用户确认）：①单文本框（users.report_goal，上限 2000 rune）；②**仅日报生成时读取**，输出**三个小节**（一今日核心工作 / 二明日工作计划 / 三近期目标计划），周报/月报聚合日报摘要自然继承、不直接读取；③不做历史快照，修改后按新目标生成（重生成历史报告目标信息不保留）；④读取失败降级为无目标生成，不阻断报告。
+
+- [x] 迁移 `238_user_report_goal.sql`：users 加 `report_goal TEXT NOT NULL DEFAULT ''`（纯增量；33336 启动已验证列生效）
+- [x] `ent/schema/user.go` 加 report_goal（text Default ""）→ 容器 `go generate ./ent && go generate ./cmd/server`（注：golang:1.27-alpine 镜像无 make，§4 的 `make generate` 命令实际需直接跑两条 go generate；root 运行 + 事后 chown 流程不变）
+- [x] Profile 链路（完全仿 v3.4 report_push_enabled *bool 范式，改 `*string`）：`user_handler.go` UpdateProfileRequest + 透传；`user_service.go` UpdateProfileRequest/UserUpdateFields + normalizeReportGoal（trim + 2000 rune 截断，提取 helper 可测）；`user_repo.go` field-mask；`api_key_repo.go` userEntityToService；dto types/mappers；`types/index.ts` User + `api/user.ts` updateProfile
+- [x] 报告链路：`ReportRepository.GetReportGoal`（ent 单查，NotFound 返回空串）；`buildSummary` 仅 daily 且目标非空时在周期行后注入 `### 用户近期目标（用户自行填写，制定计划时必须对齐）` 小节；`reportSystemPrompt` default 分支改三小节——「## 三、近期目标计划」（1-6 条，动词开头，推进中写下一步安排/未启动写启动计划；二不再重复目标；无目标严禁输出第三节）。周报/月报分支未动
+- [x] 前端 `views/user/ReportsView.vue`：页头推送开关下新增「近期目标」卡片（textarea maxlength 2000 + 保存按钮，内容未变时禁用，仿 togglePush 失败回滚）；i18n zh/en `goal.*`（placeholder 说明独立小节语义）
+- [x] 测试 `report_goal_test.go` ×4（normalize trim/截断/空白；buildSummary 日报注入/空目标省略/周报不读取——fake repo + httptest 假 LLM 捕获 messages）
+- [x] 验证：go build/vet + service(Report)/repository/handler 全套全绿 + vue-tsc 全量 EXIT=0（/tmp 隔离 pnpm@9）→ buildx dev → 33336 冒烟（healthy/HTTP 200/迁移 238 生效/user chunk 含 report_goal 与近期目标文案）→ 用户实测：日报重新生成出现「三、近期目标计划」小节 → stable 33333 发布 → commit + push fork
 
 ### 后续迭代
 

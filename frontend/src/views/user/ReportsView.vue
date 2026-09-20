@@ -52,12 +52,34 @@ const reportPushEnabled = ref(false)
 const savingPushToggle = ref(false)
 const pushingReportId = ref<number | null>(null)
 
+// 近期目标（仅日报生成时读取；保存走 updateProfile.report_goal）
+const goalText = ref('')
+const savedGoalText = ref('')
+const savingGoal = ref(false)
+
 async function loadProfile() {
   try {
     const profile = await getProfile()
     reportPushEnabled.value = profile.report_push_enabled ?? false
+    goalText.value = profile.report_goal ?? ''
+    savedGoalText.value = goalText.value
   } catch {
     // profile 读取失败不阻塞报告页，开关保持默认不参与
+  }
+}
+
+async function saveGoal() {
+  const previous = savedGoalText.value
+  savingGoal.value = true
+  try {
+    await updateProfile({ report_goal: goalText.value })
+    savedGoalText.value = goalText.value
+    appStore.showSuccess(t('admin.reports.goal.saved'))
+  } catch (error: any) {
+    goalText.value = previous
+    appStore.showError(error?.message || String(error))
+  } finally {
+    savingGoal.value = false
   }
 }
 
@@ -165,6 +187,30 @@ const modelEntries = (report: Report) =>
           />
           {{ t('admin.reports.actions.autoPush') }}
         </label>
+      </div>
+
+      <!-- 近期目标：日报生成时读取，计划小节围绕目标拆解 -->
+      <div class="card p-5">
+        <div class="text-sm font-semibold text-gray-900 dark:text-white">
+          {{ t('admin.reports.goal.title') }}
+        </div>
+        <textarea
+          v-model="goalText"
+          rows="3"
+          maxlength="2000"
+          class="input mt-2 w-full text-sm"
+          :placeholder="t('admin.reports.goal.placeholder')"
+        />
+        <div class="mt-2 flex items-center justify-between gap-3">
+          <span class="text-xs text-gray-400">{{ t('admin.reports.goal.hint') }}</span>
+          <button
+            class="btn btn-primary shrink-0 px-3 py-1.5 text-xs"
+            :disabled="savingGoal || goalText.trim() === savedGoalText.trim()"
+            @click="saveGoal"
+          >
+            {{ savingGoal ? t('admin.reports.goal.saving') : t('admin.reports.goal.save') }}
+          </button>
+        </div>
       </div>
 
       <!-- Tab + 日期 -->

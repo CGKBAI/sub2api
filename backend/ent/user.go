@@ -69,6 +69,8 @@ type User struct {
 	RpmLimit int `json:"rpm_limit,omitempty"`
 	// ReportPushEnabled holds the value of the "report_push_enabled" field.
 	ReportPushEnabled bool `json:"report_push_enabled,omitempty"`
+	// ReportGoal holds the value of the "report_goal" field.
+	ReportGoal string `json:"report_goal,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the UserQuery when eager-loading is set.
 	Edges        UserEdges `json:"edges"`
@@ -247,7 +249,7 @@ func (*User) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case user.FieldID, user.FieldConcurrency, user.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
-		case user.FieldEmail, user.FieldPasswordHash, user.FieldRole, user.FieldStatus, user.FieldUsername, user.FieldNotes, user.FieldTotpSecretEncrypted, user.FieldSignupSource, user.FieldBalanceNotifyThresholdType, user.FieldBalanceNotifyExtraEmails:
+		case user.FieldEmail, user.FieldPasswordHash, user.FieldRole, user.FieldStatus, user.FieldUsername, user.FieldNotes, user.FieldTotpSecretEncrypted, user.FieldSignupSource, user.FieldBalanceNotifyThresholdType, user.FieldBalanceNotifyExtraEmails, user.FieldReportGoal:
 			values[i] = new(sql.NullString)
 		case user.FieldCreatedAt, user.FieldUpdatedAt, user.FieldDeletedAt, user.FieldTotpEnabledAt, user.FieldLastLoginAt, user.FieldLastActiveAt:
 			values[i] = new(sql.NullTime)
@@ -433,6 +435,12 @@ func (_m *User) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field report_push_enabled", values[i])
 			} else if value.Valid {
 				_m.ReportPushEnabled = value.Bool
+			}
+		case user.FieldReportGoal:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field report_goal", values[i])
+			} else if value.Valid {
+				_m.ReportGoal = value.String
 			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
@@ -629,6 +637,9 @@ func (_m *User) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("report_push_enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ReportPushEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("report_goal=")
+	builder.WriteString(_m.ReportGoal)
 	builder.WriteByte(')')
 	return builder.String()
 }

@@ -335,6 +335,9 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 	if fields.ReportPushEnabled {
 		updateOp = updateOp.SetReportPushEnabled(userIn.ReportPushEnabled)
 	}
+	if fields.ReportGoal {
+		updateOp = updateOp.SetReportGoal(userIn.ReportGoal)
+	}
 	if fields.SignupSource && userIn.SignupSource != "" {
 		updateOp = updateOp.SetSignupSource(userIn.SignupSource)
 	}

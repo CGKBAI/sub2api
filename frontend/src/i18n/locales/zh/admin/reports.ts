@@ -35,6 +35,14 @@ export default {
     summary: { title: 'AI 工作摘要', empty: '暂无 AI 总结（未配置 LLM 或该周期无 prompt 数据）' },
     status: { pending: '生成中', done: '完成', failed: '失败' },
     push: { pushed: '已推送', pushFailed: '推送失败' },
+    goal: {
+      title: '近期目标',
+      placeholder: '填写近期要完成的项目目标，如：完成 XX 功能开发并上线；日报将生成「近期目标计划」小节围绕这些目标制定',
+      hint: '仅日报生成时读取；周报/月报聚合日报摘要自然继承。修改后从下次生成起生效',
+      save: '保存目标',
+      saving: '保存中…',
+      saved: '目标已保存'
+    },
     empty: '该条件下暂无报告',
     config: {
       title: 'AI 总结设置',

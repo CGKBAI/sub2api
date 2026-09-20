@@ -34,6 +34,9 @@ type User struct {
 	// 报告飞书自动推送参与开关
 	ReportPushEnabled bool `json:"report_push_enabled"`
 
+	// 日报近期目标（用户自行填写，仅日报生成时读取）
+	ReportGoal string `json:"report_goal"`
+
 	// RPMLimit 用户级每分钟请求数上限（0 = 不限制），仅在所用分组未设置 rpm_limit 时作为兜底生效。
 	RPMLimit int `json:"rpm_limit"`
 

@@ -396,6 +396,21 @@ func (r *reportRepository) IsReportPushEnabled(ctx context.Context, userID int64
 	return u.ReportPushEnabled, nil
 }
 
+// GetReportGoal 查询用户自行填写的日报近期目标（users.report_goal）。
+// 用户不存在或已删除时返回空串（日报按无目标生成）。
+func (r *reportRepository) GetReportGoal(ctx context.Context, userID int64) (string, error) {
+	u, err := r.client.User.Query().
+		Where(user.ID(userID)).
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return u.ReportGoal, nil
+}
+
 // MarkPushResult 记录报告最近一次飞书推送结果。
 // pushErr 为空 = 成功：写 pushed_at 并清空 last_push_error；否则仅记录失败原因。
 func (r *reportRepository) MarkPushResult(ctx context.Context, id int64, pushedAt time.Time, pushErr string) error {

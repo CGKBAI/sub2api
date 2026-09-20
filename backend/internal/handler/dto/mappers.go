@@ -33,6 +33,7 @@ func UserFromServiceShallow(u *service.User) *User {
 		TotalRecharged:             u.TotalRecharged,
 		RPMLimit:                   u.RPMLimit,
 		ReportPushEnabled:          u.ReportPushEnabled,
+		ReportGoal:                 u.ReportGoal,
 		DeletedAt:                  u.DeletedAt,
 	}
 }

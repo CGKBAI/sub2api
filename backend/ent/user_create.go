@@ -382,6 +382,20 @@ func (_c *UserCreate) SetNillableReportPushEnabled(v *bool) *UserCreate {
 	return _c
 }
 
+// SetReportGoal sets the "report_goal" field.
+func (_c *UserCreate) SetReportGoal(v string) *UserCreate {
+	_c.mutation.SetReportGoal(v)
+	return _c
+}
+
+// SetNillableReportGoal sets the "report_goal" field if the given value is not nil.
+func (_c *UserCreate) SetNillableReportGoal(v *string) *UserCreate {
+	if v != nil {
+		_c.SetReportGoal(*v)
+	}
+	return _c
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
 func (_c *UserCreate) AddAPIKeyIDs(ids ...int64) *UserCreate {
 	_c.mutation.AddAPIKeyIDs(ids...)
@@ -692,6 +706,10 @@ func (_c *UserCreate) defaults() error {
 		v := user.DefaultReportPushEnabled
 		_c.mutation.SetReportPushEnabled(v)
 	}
+	if _, ok := _c.mutation.ReportGoal(); !ok {
+		v := user.DefaultReportGoal
+		_c.mutation.SetReportGoal(v)
+	}
 	return nil
 }
 
@@ -786,6 +804,9 @@ func (_c *UserCreate) check() error {
 	}
 	if _, ok := _c.mutation.ReportPushEnabled(); !ok {
 		return &ValidationError{Name: "report_push_enabled", err: errors.New(`ent: missing required field "User.report_push_enabled"`)}
+	}
+	if _, ok := _c.mutation.ReportGoal(); !ok {
+		return &ValidationError{Name: "report_goal", err: errors.New(`ent: missing required field "User.report_goal"`)}
 	}
 	return nil
 }
@@ -917,6 +938,10 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ReportPushEnabled(); ok {
 		_spec.SetField(user.FieldReportPushEnabled, field.TypeBool, value)
 		_node.ReportPushEnabled = value
+	}
+	if value, ok := _c.mutation.ReportGoal(); ok {
+		_spec.SetField(user.FieldReportGoal, field.TypeString, value)
+		_node.ReportGoal = value
 	}
 	if nodes := _c.mutation.APIKeysIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1554,6 +1579,18 @@ func (u *UserUpsert) UpdateReportPushEnabled() *UserUpsert {
 	return u
 }
 
+// SetReportGoal sets the "report_goal" field.
+func (u *UserUpsert) SetReportGoal(v string) *UserUpsert {
+	u.Set(user.FieldReportGoal, v)
+	return u
+}
+
+// UpdateReportGoal sets the "report_goal" field to the value that was provided on create.
+func (u *UserUpsert) UpdateReportGoal() *UserUpsert {
+	u.SetExcluded(user.FieldReportGoal)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -2030,6 +2067,20 @@ func (u *UserUpsertOne) SetReportPushEnabled(v bool) *UserUpsertOne {
 func (u *UserUpsertOne) UpdateReportPushEnabled() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateReportPushEnabled()
+	})
+}
+
+// SetReportGoal sets the "report_goal" field.
+func (u *UserUpsertOne) SetReportGoal(v string) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetReportGoal(v)
+	})
+}
+
+// UpdateReportGoal sets the "report_goal" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateReportGoal() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateReportGoal()
 	})
 }
 
@@ -2675,6 +2726,20 @@ func (u *UserUpsertBulk) SetReportPushEnabled(v bool) *UserUpsertBulk {
 func (u *UserUpsertBulk) UpdateReportPushEnabled() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateReportPushEnabled()
+	})
+}
+
+// SetReportGoal sets the "report_goal" field.
+func (u *UserUpsertBulk) SetReportGoal(v string) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetReportGoal(v)
+	})
+}
+
+// UpdateReportGoal sets the "report_goal" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateReportGoal() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateReportGoal()
 	})
 }
 

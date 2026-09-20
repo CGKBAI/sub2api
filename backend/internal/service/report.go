@@ -63,6 +63,9 @@ type ReportRepository interface {
 	ListActiveUserIDs(ctx context.Context, start, end time.Time) ([]int64, error)
 	// GetUsername 查询用户显示名（users.username，用于报告标题）。
 	GetUsername(ctx context.Context, userID int64) (string, error)
+	// GetReportGoal 查询用户自行填写的日报近期目标（users.report_goal）。
+	// 空串表示未设置，日报按无目标生成；周报/月报不读取（目标经日报摘要继承）。
+	GetReportGoal(ctx context.Context, userID int64) (string, error)
 	// IsReportPushEnabled 查询用户是否参与报告飞书自动推送（users.report_push_enabled）。
 	IsReportPushEnabled(ctx context.Context, userID int64) (bool, error)
 	// MarkPushResult 记录报告最近一次飞书推送结果：
