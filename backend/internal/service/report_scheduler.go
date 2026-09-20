@@ -8,6 +8,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/holiday"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/google/uuid"
@@ -26,6 +27,10 @@ const (
 	reportSchedulerLockRenewInterval = 90 * time.Second
 
 	reportSchedulerLastRunKeyPrefix = "reports:scheduler:last_run:"
+
+	// 实际生成标记（与 last_run 的「评估标记」区分）：skip_holidays 规则用它判断
+	// 本周/本月是否已生成过，评估跳过日不会污染该标记
+	reportSchedulerLastGenKeyPrefix = "reports:scheduler:last_gen:"
 
 	reportSchedulerTickInterval = 1 * time.Minute
 
@@ -51,8 +56,10 @@ return 0
 
 // ReportSchedulerService 后台定时生成日报/周报/月报。
 //
-// 每分钟 tick 一次，按配置里的 cron 表达式（默认每日 20:00 日报、周五 20:10 周报、
-// 每月 1 日 20:20 上月月报）触发；Redis leader lock 保证多实例（灰度并行）只有一个实例执行；
+// 每分钟 tick 一次，按配置里的 cron 表达式（默认每日 19:00 评估一次）触发；
+// skip_holidays=true 时 cron 仅取时分，生成日由工作日规则决定：
+// 日报=每个工作日、周报=本周最后一个工作日、月报=本月第一个工作日（生成上月）；
+// Redis leader lock 保证多实例（灰度并行）只有一个实例执行；
 // REPORT_SCHEDULER_ENABLED=false 可整体禁用（canary 用）。
 type ReportSchedulerService struct {
 	reportService *ReportService
@@ -61,6 +68,9 @@ type ReportSchedulerService struct {
 
 	instanceID string
 	loc        *time.Location
+
+	// 无内置节假日表的年份只 warn 一次（回退周末规则）
+	warnedNoHolidayData bool
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -165,6 +175,13 @@ func (s *ReportSchedulerService) runOnce() {
 		now = now.In(s.loc)
 	}
 
+	// 节假日表未覆盖当前年份时提示一次：工作日判断回退「仅排除周末」
+	if cfg.SkipHolidays && !holiday.HasYearData(now.Year()) && !s.warnedNoHolidayData {
+		s.warnedNoHolidayData = true
+		logger.LegacyPrintf("service.report",
+			"[ReportScheduler] no built-in holiday table for %d, workday rule falls back to weekends-only", now.Year())
+	}
+
 	type scheduleDef struct {
 		kind       string
 		spec       string
@@ -197,8 +214,18 @@ func (s *ReportSchedulerService) runOnce() {
 			continue
 		}
 
-		// 先标记已跑，避免失败后每分钟重试轰炸 LLM
+		// 先标记已评估，避免跳过/失败后每分钟重触发
 		s.setLastRunAt(ctx, d.kind, now)
+
+		// 节假日感知：cron 只决定触发时刻，生成日由工作日规则决定
+		if cfg.SkipHolidays && !reportDueForDay(d.kind, now, s.getGenMarkerAt(ctx, d.kind)) {
+			logger.LegacyPrintf("service.report",
+				"[ReportScheduler] skip %s on %s (not a report workday)", d.kind, now.Format("2006-01-02"))
+			continue
+		}
+
+		// 记录实际生成标记（skip_holidays 的本周/本月去重依据）
+		s.setLastGenAt(ctx, d.kind, now)
 
 		// 月报语义为「ref 所在自然月」，定时生成上月：ref 传上月 1 日
 		ref := now
@@ -214,6 +241,30 @@ func (s *ReportSchedulerService) runOnce() {
 				"[ReportScheduler] generate %s reports: generated=%d err=%v", d.kind, generated, err)
 		}
 	}
+}
+
+// reportDueForDay 判断当前评估时刻是否为该类型报告的生成日（skip_holidays=true 时使用）。
+// 日报=每个工作日；周报=本周（周一~周日）最后一个工作日，整周全假则该周不出；
+// 月报=本月第一个工作日。genMarker 为本周/本月上次实际生成时间（零值=从未生成），
+// 用于错过触发时刻后的 catch-up 与同一周期去重。
+func reportDueForDay(kind string, now, genMarker time.Time) bool {
+	switch kind {
+	case "daily":
+		return holiday.IsWorkday(now)
+	case "weekly":
+		last := holiday.LastWorkdayOfWeek(now)
+		if last.IsZero() {
+			return false
+		}
+		return !now.Before(last) && genMarker.Before(timezone.StartOfWeek(now))
+	case "monthly":
+		first := holiday.FirstWorkdayOfMonth(now)
+		if first.IsZero() {
+			return false
+		}
+		return !now.Before(first) && genMarker.Before(timezone.StartOfMonth(now))
+	}
+	return false
 }
 
 // =========================
@@ -296,4 +347,26 @@ func (s *ReportSchedulerService) setLastRunAt(ctx context.Context, kind string, 
 	// TTL 覆盖月报周期：服务/Redis 在触发时刻宕机恢复后 key 仍在，
 	// catch-up 逻辑才能补上错过的那次生成（24h 会导致月报永久丢失）
 	_ = s.redisClient.Set(ctx, reportSchedulerLastRunKeyPrefix+kind, now.Format(time.RFC3339), 35*24*time.Hour).Err()
+}
+
+// getGenMarkerAt 读取上次实际生成时间；无 last_gen 标记时回退 last_run
+// （v3.7 升级日的存量标记仍能压住「本周/本月已生成过」的判断）。
+func (s *ReportSchedulerService) getGenMarkerAt(ctx context.Context, kind string) time.Time {
+	if s == nil || s.redisClient == nil {
+		return time.Time{}
+	}
+	raw, err := s.redisClient.Get(ctx, reportSchedulerLastGenKeyPrefix+kind).Result()
+	if err == nil && raw != "" {
+		if t, perr := time.Parse(time.RFC3339, raw); perr == nil {
+			return t
+		}
+	}
+	return s.getLastRunAt(ctx, kind)
+}
+
+func (s *ReportSchedulerService) setLastGenAt(ctx context.Context, kind string, now time.Time) {
+	if s == nil || s.redisClient == nil {
+		return
+	}
+	_ = s.redisClient.Set(ctx, reportSchedulerLastGenKeyPrefix+kind, now.Format(time.RFC3339), 35*24*time.Hour).Err()
 }

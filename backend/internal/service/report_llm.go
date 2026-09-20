@@ -22,10 +22,14 @@ type ReportLLMConfig struct {
 	// 上下文预算
 	MaxPrompts          int `json:"max_prompts"`           // 每次总结最多取多少条 prompt（默认 30）
 	PromptTruncateChars int `json:"prompt_truncate_chars"` // 单条 prompt 截断长度（默认 500）
-	// 定时计划（cron，5 段式：分 时 日 月 周）
-	DailySchedule   string `json:"daily_schedule"`   // 默认 "0 20 * * *"
-	WeeklySchedule  string `json:"weekly_schedule"`  // 默认 "10 20 * * 5"
-	MonthlySchedule string `json:"monthly_schedule"` // 默认 "20 20 1 * *"（每月 1 日生成上月）
+	// 定时计划（cron，5 段式：分 时 日 月 周）。
+	// 仅「分 时」生效：三种报告统一每天评估一次，生成日由工作日规则决定
+	// （skip_holidays=true 时：日报=工作日、周报=本周最后工作日、月报=本月首个工作日）
+	DailySchedule   string `json:"daily_schedule"`   // 默认 "0 19 * * *"
+	WeeklySchedule  string `json:"weekly_schedule"`  // 默认 "0 19 * * *"
+	MonthlySchedule string `json:"monthly_schedule"` // 默认 "0 19 * * *"（生成 ref 的上一自然月）
+	// 节假日感知（默认开启）：跳过周末与法定假日；关闭则回到「逢 cron 触发即生成」的旧语义
+	SkipHolidays bool `json:"skip_holidays"`
 	// 飞书推送（群自定义机器人 Webhook）
 	FeishuEnabled     bool   `json:"feishu_enabled"`
 	FeishuWebhookURL  string `json:"feishu_webhook_url"`
@@ -43,9 +47,10 @@ func defaultReportLLMConfig() *ReportLLMConfig {
 		Model:               "",
 		MaxPrompts:          30,
 		PromptTruncateChars: 500,
-		DailySchedule:       "0 20 * * *",
-		WeeklySchedule:      "10 20 * * 5",
-		MonthlySchedule:     "20 20 1 * *",
+		DailySchedule:       "0 19 * * *",
+		WeeklySchedule:      "0 19 * * *",
+		MonthlySchedule:     "0 19 * * *",
+		SkipHolidays:        true,
 	}
 }
 
@@ -70,15 +75,15 @@ func normalizeReportLLMConfig(cfg *ReportLLMConfig) {
 	}
 	cfg.DailySchedule = strings.TrimSpace(cfg.DailySchedule)
 	if cfg.DailySchedule == "" {
-		cfg.DailySchedule = "0 20 * * *"
+		cfg.DailySchedule = "0 19 * * *"
 	}
 	cfg.WeeklySchedule = strings.TrimSpace(cfg.WeeklySchedule)
 	if cfg.WeeklySchedule == "" {
-		cfg.WeeklySchedule = "10 20 * * 5"
+		cfg.WeeklySchedule = "0 19 * * *"
 	}
 	cfg.MonthlySchedule = strings.TrimSpace(cfg.MonthlySchedule)
 	if cfg.MonthlySchedule == "" {
-		cfg.MonthlySchedule = "20 20 1 * *"
+		cfg.MonthlySchedule = "0 19 * * *"
 	}
 	cfg.FeishuWebhookURL = strings.TrimSpace(cfg.FeishuWebhookURL)
 	cfg.FeishuSecret = strings.TrimSpace(cfg.FeishuSecret)

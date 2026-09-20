@@ -183,6 +183,7 @@ type updateReportConfigRequest struct {
 	DailySchedule       *string `json:"daily_schedule"`
 	WeeklySchedule      *string `json:"weekly_schedule"`
 	MonthlySchedule     *string `json:"monthly_schedule"`
+	SkipHolidays        *bool   `json:"skip_holidays"`
 	FeishuEnabled       *bool   `json:"feishu_enabled"`
 	// FeishuWebhookURL / FeishuSecret 为空时表示保留旧值（与 api_key 同语义）
 	FeishuWebhookURL  *string `json:"feishu_webhook_url"`
@@ -233,6 +234,9 @@ func (h *ReportHandler) UpdateConfig(c *gin.Context) {
 	}
 	if req.MonthlySchedule != nil {
 		cfg.MonthlySchedule = *req.MonthlySchedule
+	}
+	if req.SkipHolidays != nil {
+		cfg.SkipHolidays = *req.SkipHolidays
 	}
 	if req.FeishuEnabled != nil {
 		cfg.FeishuEnabled = *req.FeishuEnabled

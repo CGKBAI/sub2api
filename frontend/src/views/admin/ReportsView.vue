@@ -157,9 +157,10 @@ const configForm = ref<ReportLLMConfig & { api_key: string }>({
   model: '',
   max_prompts: 30,
   prompt_truncate_chars: 500,
-  daily_schedule: '0 20 * * *',
-  weekly_schedule: '10 20 * * 5',
-  monthly_schedule: '20 20 1 * *',
+  daily_schedule: '0 19 * * *',
+  weekly_schedule: '0 19 * * *',
+  monthly_schedule: '0 19 * * *',
+  skip_holidays: true,
   feishu_enabled: false,
   feishu_webhook_url: '',
   feishu_secret: '',
@@ -451,6 +452,17 @@ const statusBadge = computed(() => (status: string) => {
               <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.config.monthlySchedule') }}</label>
               <input v-model="configForm.monthly_schedule" type="text" :class="inputClass" />
             </div>
+          </div>
+
+          <!-- 节假日感知 -->
+          <div class="space-y-2 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+              <input v-model="configForm.skip_holidays" type="checkbox" class="checkbox" />
+              {{ t('admin.reports.config.skipHolidays') }}
+            </label>
+            <p class="text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.reports.config.skipHolidaysHint') }}
+            </p>
           </div>
 
           <!-- 飞书推送 -->

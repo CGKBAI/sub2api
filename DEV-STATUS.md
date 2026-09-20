@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-20（**v3.6 日报近期目标已上线生产 stable 33333**：用户在报告页自行维护「近期目标」，日报生成时读取并输出独立「三、近期目标计划」小节，见 §8 v3.6）。
+> 本文档是完整项目上下文。最后更新：2026-09-20（**v3.7 定时 19:00 + 法定节假日感知已上线生产 stable 33333**：三种报告 cron 统一 `0 19 * * *` 仅取时分，生成日由工作日规则决定（日报=工作日/周报=本周最后工作日/月报=当月首个工作日），`skip_holidays` 开关默认开，内置 2026 年节假日表，见 §8 v3.7）。
 
 ## 1. 功能与当前状态总览
 
@@ -87,7 +87,7 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 |---|---|
 | `risk_control_enabled` | true |
 | `prompt_audit_config` | 异步审计（async，不阻断），审计节点：**MiniMax** `https://api.minimaxi.com` + `MiniMax-M2`（账号 id=5 的 key，AES-256-GCM 加密存 token_ciphertext，密钥=.env 的 TOTP_ENCRYPTION_KEY），input_limit=2000，timeout=15000ms |
-| `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=30，单条截断 500 字符，日报 cron `0 20 * * *`，周报 `10 20 * * 5`，月报 `20 20 1 * *`（每月 1 日生成上月；存量 JSON 缺 monthly_schedule 时读取自动补默认） |
+| `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=60，单条截断 800 字符，日报/周报/月报 cron 均 `0 19 * * *`（仅时分生效），skip_holidays=true（v3.7：生成日由工作日规则决定——日报=工作日、周报=本周最后工作日、月报=当月首个工作日生成上月；存量 JSON 缺字段时 cron 读取自动补默认，skip_holidays 缺省=false 需 SQL 显式写入） |
 
 配置修改：直接 UPDATE settings 表（ConfigManager 每 5 秒 TTL reload，无需重启）；endpoint token 必须先用 TOTP_ENCRYPTION_KEY 做 AES-256-GCM 加密（base64(nonce+ct+tag)，node crypto 可做）。
 
@@ -209,8 +209,23 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 - [x] 测试 `report_goal_test.go` ×4（normalize trim/截断/空白；buildSummary 日报注入/空目标省略/周报不读取——fake repo + httptest 假 LLM 捕获 messages）
 - [x] 验证：go build/vet + service(Report)/repository/handler 全套全绿 + vue-tsc 全量 EXIT=0（/tmp 隔离 pnpm@9）→ buildx dev → 33336 冒烟（healthy/HTTP 200/迁移 238 生效/user chunk 含 report_goal 与近期目标文案）→ 用户实测：日报重新生成出现「三、近期目标计划」小节 → stable 33333 发布 → commit + push fork
 
+### v3.7：定时 19:00 + 法定节假日感知（2026-09-20 已上线）
+
+> 背景：用户要求三种报告自动发送时间统一改为晚上 7 点，并贴合国家法定节假日。决策（用户确认）：①日报仅工作日生成（普通周末不发，行为变化）；②周报=每周最后一个工作日 19:00（普通周即周五；国庆前一周 9/30 出、调休补班周六可收尾）；③月报=当月第一个工作日 19:00 生成上月；④节假日数据源=内置表（每年 11 月国办公布次年安排后人工补表，无表年份回退「仅避开周末」）。
+
+- [x] 新增 `backend/internal/pkg/holiday` 包：2026 年国办安排内置（`holidays` 休 + `workdays` 调休补班，2026-09-20 经 timor.tech 接口逐日核对）；`IsWorkday`/`HasYearData`/`LastWorkdayOfWeek`/`FirstWorkdayOfMonth`；单测 4 组（含 2027 无表回退）
+- [x] `report_llm.go`：`ReportLLMConfig` 加 `skip_holidays`（默认 true）；三个 cron 默认值统一 `0 19 * * *`（仅时分生效）；normalize 空值补同默认。注意：skip_holidays 为普通 bool，存量 JSON 缺该字段 unmarshal=false，**必须靠发布时 SQL 显式写 true**
+- [x] `report_scheduler.go`：cron 仍负责触发时刻（每天 19:00 评估一次），`reportDueForDay(kind, now, genMarker)` 纯函数决定生成日；last_run=评估标记（跳过日也置，防每分钟重触发），新增 `last_gen`（实际生成标记，本周/本月去重+catch-up 依据，缺失时回退 last_run 兼容升级）；无表年份 warn 一次。leader lock/90s 续期/35d TTL 全部未动
+- [x] admin handler `updateReportConfigRequest` 加 `skip_holidays`（*bool 透传，redact 值拷贝自动带出）
+- [x] 前端：admin 设置弹窗加「规避法定节假日」开关+说明块；cron 三输入框标签改「仅时分生效」；`autoPushHint` 时间文案更新（用户页复用同一 i18n key）；i18n zh/en
+- [x] 测试：`report_scheduler_rule_test.go` 20 例（工作日/调休/整周全假/catch-up/去重/月报顺延含 1/4 元旦补班出上月）全绿
+- [x] 发布顺序关键：**先 stable 镜像后 SQL**（旧代码吃到 daily-fire cron 会天天生成）；SQL `value=(value::jsonb||'{...}')::text` 写入新 cron ×3 + skip_holidays=true，5s 热加载；Redis 预置 `last_gen:weekly=9/18 20:10`、`last_gen:monthly=9/1 20:20`（旧 last_run 已在 24h TTL 时代过期，否则升级当晚周报/月报会重复补发）
+- [x] 验证：go build/vet + holiday 全部 + service Report 全绿 + vue-tsc EXIT=0（/tmp 隔离 pnpm@9）→ buildx dev → 33336 冒烟（healthy/HTTP 200/无 panic/二进制含新逻辑与 i18n key）→ stable 33333 发布（healthy/HTTP 200）→ SQL 生效（4 字段确认）→ commit + push fork
+- 上线当日语义核对（2026-09-20 周日调休补班）：19:00 日报生成+推送；周报/月报 skip 留日志；下个节点=周报 9/24（周四，9/25 中秋）、9 月月报 10/8（国庆后首个工作日）
+
 ### 后续迭代
 
+- [ ] **节假日表年度维护**：每年 11 月国办公布次年放假安排后，在 `backend/internal/pkg/holiday/holiday.go` init() 补表并走 §4 发布流程（2027 年表未内置前自动按「仅避开周末」回退，日志会 warn 一次）
 - [ ] 飞书推送优化（分群/自建应用/推送状态——推送状态已由 v3.5 落库，剩分群/自建应用/失败重试队列，见 §10 后续优化）
 - [ ] 代码审查中优遗留（2026-09-20 审查结论）：批量生成异步化（generate-all 30min 同步阻塞）、每用户 N+1 查询、persist 改 UPSERT、`MaxPrompts` 死配置接线、cron 保存校验、脱敏值回写覆盖风险、64k 头尾拼接保留最新轮次、`left(2000)` 截断丢未闭合 reminder、LLM 上下文总预算 cap、前端列表竞态/分页/admin-user 视图抽组件、prompt_audit_events 保留策略
 

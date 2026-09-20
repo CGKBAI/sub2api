@@ -22,7 +22,8 @@ export default {
       pushing: 'Sending…',
       pushSuccess: 'Pushed to Feishu group',
       autoPush: 'Join Feishu auto push',
-      autoPushHint: 'Applies only to scheduled reports (daily 20:00, weekly Fri, monthly on the 1st); manually generated reports are never auto-pushed — use the card button to send'
+      autoPushHint:
+        'Applies only to scheduled reports (daily 19:00 on workdays, weekly on the last workday, monthly on the first workday, skipping statutory holidays); manually generated reports are never auto-pushed — use the card button to send'
     },
     stats: {
       requests: 'Requests',
@@ -58,9 +59,12 @@ export default {
       modelPlaceholder: 'qwen-plus / gpt-4o-mini etc.',
       maxPrompts: 'Max prompts per summary',
       truncateChars: 'Truncate each prompt to characters',
-      dailySchedule: 'Daily cron (min hour dom mon dow)',
-      weeklySchedule: 'Weekly cron (min hour dom mon dow)',
-      monthlySchedule: 'Monthly cron (1st of month, previous month)',
+      dailySchedule: 'Daily cron (hour & minute only)',
+      weeklySchedule: 'Weekly cron (hour & minute only)',
+      monthlySchedule: 'Monthly cron (hour & minute only, previous month)',
+      skipHolidays: 'Skip weekends & statutory holidays (incl. adjusted workdays)',
+      skipHolidaysHint:
+        'When on, the generation day follows workday rules: daily = every workday, weekly = last workday of the week, monthly = first workday of the month; the cron decides the time of day only. When off, reports generate on every cron trigger. Falls back to weekends-only until next year\'s schedule is built in',
       feishuSection: 'Feishu Push',
       feishuDescription:
         'Push report cards to a Feishu group via custom bot webhook. Get one in Feishu: group settings → bots → add custom bot.',

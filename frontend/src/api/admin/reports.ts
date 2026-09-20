@@ -56,6 +56,7 @@ export interface ReportLLMConfig {
   daily_schedule: string
   weekly_schedule: string
   monthly_schedule: string
+  skip_holidays: boolean
   feishu_enabled: boolean
   feishu_webhook_url: string
   feishu_secret: string
