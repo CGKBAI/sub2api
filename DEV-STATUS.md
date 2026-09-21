@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-20 晚（**v3.8 节假日感知页头开关 + 关模式语义已上线生产 stable 33333**：管理员一键切换；开=工作日规则（v3.7），关=日报每天（当日请求>10 条的用户）/周报周五/月报月底出当月，见 §8 v3.8；同日早些时候 v3.7 定时 19:00+节假日感知上线）。
+> 本文档是完整项目上下文。最后更新：2026-09-20 晚（**v3.9 周报/月报发布日抑制日报飞书推送已上线生产 stable 33333**：日报照常生成但不自动推，防群消息刷屏，见 §8 v3.9；同日 v3.8 页头开关+关模式语义、v3.7 定时 19:00+节假日感知）。
 
 ## 1. 功能与当前状态总览
 
@@ -232,6 +232,16 @@ docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker c
 - [x] 前端：admin ReportsView 页头新增「节假日感知：开/关」按钮（onMounted getConfig 初始化，点击 updateConfig 单字段切换，title 悬浮显示两模式规则）；设置弹窗移除 checkbox 改为 `scheduleHint` 静态说明（cron 仅时分生效）；`autoPushHint` 改模式中性文案；i18n zh/en（actions.holidayAwareOn/Off/Hint/holidayToggled + config.scheduleHint）
 - [x] 测试：规则用例扩到 33（关模式 12 例：周末/节假日日报照发、周五、错过补发、去重、9/30 与 2/28 月底、不跨月补）+ `belowDailyMinRequests` 7 例全绿
 - [x] 验证：go build/vet/test + vue-tsc EXIT=0 → buildx dev → 33336 冒烟（healthy/HTTP 200/无 panic/admin chunk 含 holidayAwareHint）→ stable 33333 发布（healthy/HTTP 200；无 SQL——开关由按钮运行时切换，生产当前=开）→ commit + push fork
+
+### v3.9：周报/月报发布日抑制日报推送（2026-09-20 晚已上线）
+
+> 背景：用户反馈周报/月报与日报同时发布导致飞书群消息过多。决策：当天若发布周报或月报，日报**照常生成**但**不自动推飞书**（手动按钮推送不受影响）。
+
+- [x] `report_service.go`：`GenerateReport`/`GenerateForAllUsers` 加 `suppressAutoPush bool` 参数（仅 scheduled 路径生效，手动调用一律 false）；抑制时不调 `maybeAutoPushFeishu`
+- [x] `report_scheduler.go`：抽出 `evaluateKind(kind, spec, now, skipHolidays)` 纯读取方法（cron 到期 + 生成日规则，可重复调用）；runOnce 先预判周报/月报今天是否发布（`biggerReportToday`），再逐类型生成，日报在发布日带 suppress 并打一条 `daily auto push suppressed` 日志；last_run/last_gen 语义不变（评估标记在 cronDue 后置位）
+- [x] handler 两处手动调用点补 `false`；前端无 UI 变化，仅 `autoPushHint` 文案补充抑制规则说明（zh/en）
+- [x] 验证：go build/vet/test + vue-tsc EXIT=0 → buildx dev → 33336 冒烟（healthy/无 panic/二进制含抑制日志特征）→ stable 33333 发布 → commit + push fork
+- 注：抑制条件=「周报/月报当天定时发布」；用户级 report_push_enabled、类型开关等原有条件不变；抑制只作用于自动推送，报告生成与推送状态落库（pushed_at 不写）不受影响
 
 ### 后续迭代
 

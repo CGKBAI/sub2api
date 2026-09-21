@@ -23,7 +23,7 @@ export default {
       pushSuccess: 'Pushed to Feishu group',
       autoPush: 'Join Feishu auto push',
       autoPushHint:
-        'Applies only to scheduled reports (times & date rules follow the "Holiday awareness" toggle in the header); manually generated reports are never auto-pushed — use the card button to send',
+        'Applies only to scheduled reports (times & date rules follow the "Holiday awareness" toggle in the header). On days a weekly or monthly report is published, the daily report is still generated but not auto-pushed to avoid flooding the group. Manually generated reports are never auto-pushed — use the card button to send',
       holidayAwareOn: 'Holiday awareness: on',
       holidayAwareOff: 'Holiday awareness: off',
       holidayAwareHint:

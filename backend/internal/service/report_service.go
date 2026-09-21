@@ -83,7 +83,7 @@ func ReportPeriod(reportType string, ref time.Time) (time.Time, time.Time, error
 // GenerateReport 为单个用户生成指定周期（日/周/月）的报告。
 // trigger 区分生成来源：manual（管理端/用户手动）永不自动推飞书；
 // scheduled（定时任务）按开关自动推。已存在同周期报告时覆盖更新（手动重试语义）。
-func (s *ReportService) GenerateReport(ctx context.Context, userID int64, reportType string, ref time.Time, trigger ReportTrigger) (*Report, error) {
+func (s *ReportService) GenerateReport(ctx context.Context, userID int64, reportType string, ref time.Time, trigger ReportTrigger, suppressAutoPush bool) (*Report, error) {
 	if s == nil || s.reportRepo == nil {
 		return nil, errors.New("report repository not initialized")
 	}
@@ -165,8 +165,9 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 	if err != nil {
 		return nil, err
 	}
-	// 仅定时生成自动推飞书；手动生成只在 web 展示，由卡片按钮手动推送
-	if trigger == ReportTriggerScheduled {
+	// 仅定时生成自动推飞书；手动生成只在 web 展示，由卡片按钮手动推送。
+	// suppressAutoPush：周报/月报发布日抑制日报自动推送（调度器传入），防群消息刷屏
+	if trigger == ReportTriggerScheduled && !suppressAutoPush {
 		s.maybeAutoPushFeishu(ctx, cfg, saved)
 	}
 	return saved, nil
@@ -296,7 +297,7 @@ func belowDailyMinRequests(reportType string, trigger ReportTrigger, skipHoliday
 		requests <= reportDailyMinRequests
 }
 
-func (s *ReportService) GenerateForAllUsers(ctx context.Context, reportType string, ref time.Time, trigger ReportTrigger) (int, error) {
+func (s *ReportService) GenerateForAllUsers(ctx context.Context, reportType string, ref time.Time, trigger ReportTrigger, suppressAutoPush bool) (int, error) {
 	if s == nil || s.reportRepo == nil {
 		return 0, errors.New("report repository not initialized")
 	}
@@ -313,7 +314,7 @@ func (s *ReportService) GenerateForAllUsers(ctx context.Context, reportType stri
 	generated := 0
 	var firstErr error
 	for _, uid := range userIDs {
-		_, gErr := s.GenerateReport(ctx, uid, reportType, ref, trigger)
+		_, gErr := s.GenerateReport(ctx, uid, reportType, ref, trigger, suppressAutoPush)
 		if gErr != nil {
 			if errors.Is(gErr, ErrReportGenerateUserNotFound) || errors.Is(gErr, ErrReportSkippedLowUsage) {
 				continue

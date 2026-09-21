@@ -194,24 +194,22 @@ func (s *ReportSchedulerService) runOnce() {
 		{kind: "monthly", spec: cfg.MonthlySchedule, reportType: domain.ReportTypeMonthly},
 	}
 
+	// 预判：今天是否发布周报/月报（cron 到期 + 生成日规则命中）。
+	// 发布日当天日报照常生成但抑制自动推飞书，避免群消息刷屏（手动按钮推送不受影响）。
+	biggerReportToday := false
 	for _, d := range defs {
-		spec := strings.TrimSpace(d.spec)
-		if spec == "" {
+		if d.kind == "daily" {
 			continue
 		}
-		sched, err := reportSchedulerCronParser.Parse(spec)
-		if err != nil {
-			logger.LegacyPrintf("service.report", "[ReportScheduler] parse %s schedule %q: %v", d.kind, spec, err)
-			continue
+		if cronDue, reportDay := s.evaluateKind(ctx, d.kind, d.spec, now, cfg.SkipHolidays); cronDue && reportDay {
+			biggerReportToday = true
+			break
 		}
+	}
 
-		lastRun := s.getLastRunAt(ctx, d.kind)
-		base := lastRun
-		if base.IsZero() {
-			base = now.Add(-1 * time.Minute)
-		}
-		next := sched.Next(base)
-		if next.IsZero() || next.After(now) {
+	for _, d := range defs {
+		cronDue, reportDay := s.evaluateKind(ctx, d.kind, d.spec, now, cfg.SkipHolidays)
+		if !cronDue {
 			continue
 		}
 
@@ -219,7 +217,7 @@ func (s *ReportSchedulerService) runOnce() {
 		s.setLastRunAt(ctx, d.kind, now)
 
 		// 生成日规则：开（skip_holidays=true）=工作日规则；关=日报每天、周报周五、月报月底
-		if !reportDueForDay(d.kind, now, s.getGenMarkerAt(ctx, d.kind), cfg.SkipHolidays) {
+		if !reportDay {
 			logger.LegacyPrintf("service.report",
 				"[ReportScheduler] skip %s on %s (not a report day, skip_holidays=%v)",
 				d.kind, now.Format("2006-01-02"), cfg.SkipHolidays)
@@ -236,14 +234,45 @@ func (s *ReportSchedulerService) runOnce() {
 			ref = timezone.StartOfMonth(now).AddDate(0, -1, 0)
 		}
 
+		suppressDailyPush := d.kind == "daily" && biggerReportToday
+		if suppressDailyPush {
+			logger.LegacyPrintf("service.report",
+				"[ReportScheduler] daily auto push suppressed on %s (weekly/monthly publishing today)",
+				now.Format("2006-01-02"))
+		}
+
 		genCtx, genCancel := context.WithTimeout(ctx, reportSchedulerJobTimeout)
-		generated, err := s.reportService.GenerateForAllUsers(genCtx, d.reportType, ref, ReportTriggerScheduled)
+		generated, err := s.reportService.GenerateForAllUsers(genCtx, d.reportType, ref, ReportTriggerScheduled, suppressDailyPush)
 		genCancel()
 		if err != nil {
 			logger.LegacyPrintf("service.report",
 				"[ReportScheduler] generate %s reports: generated=%d err=%v", d.kind, generated, err)
 		}
 	}
+}
+
+// evaluateKind 判断该类型此刻是否 cron 到期（今天该评估）且为生成日。
+// 纯读取（last_run/genMarker/规则），不写任何标记，可重复调用。
+func (s *ReportSchedulerService) evaluateKind(ctx context.Context, kind, spec string, now time.Time, skipHolidays bool) (cronDue, reportDay bool) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return false, false
+	}
+	sched, err := reportSchedulerCronParser.Parse(spec)
+	if err != nil {
+		logger.LegacyPrintf("service.report", "[ReportScheduler] parse %s schedule %q: %v", kind, spec, err)
+		return false, false
+	}
+	lastRun := s.getLastRunAt(ctx, kind)
+	base := lastRun
+	if base.IsZero() {
+		base = now.Add(-1 * time.Minute)
+	}
+	next := sched.Next(base)
+	if next.IsZero() || next.After(now) {
+		return false, false
+	}
+	return true, reportDueForDay(kind, now, s.getGenMarkerAt(ctx, kind), skipHolidays)
 }
 
 // reportDueForDay 判断当前评估时刻是否为该类型报告的生成日。genMarker 为本周

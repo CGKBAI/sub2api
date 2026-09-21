@@ -21,7 +21,8 @@ export default {
       pushing: '发送中…',
       pushSuccess: '已推送到飞书群',
       autoPush: '参与飞书自动推送',
-      autoPushHint: '仅作用于定时生成的报告（生成时刻与日期规则见页头「节假日感知」开关）；手动生成的报告不自动推送，可点卡片按钮手动发送',
+      autoPushHint:
+        '仅作用于定时生成的报告（生成时刻与日期规则见页头「节假日感知」开关）；当天发布周报/月报时，日报仍会生成但不再自动推送，避免群消息刷屏。手动生成的报告不自动推送，可点卡片按钮手动发送',
       holidayAwareOn: '节假日感知：开',
       holidayAwareOff: '节假日感知：关',
       holidayAwareHint:
