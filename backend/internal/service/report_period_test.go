@@ -8,8 +8,9 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 )
 
-// 周报周期为正常自然周 [本周一 00:00, 下周一 00:00)：定时生成为本周最后一个
-// 工作日 19:00（普通周即周五），覆盖周一~周日周期，周末工作靠之后手动重生成补入。
+// 周报周期为正常自然周 [本周一 00:00, 下周一 00:00)：定时生成日由 skip_holidays
+// 决定（开=本周最后一个工作日，普通周即周五；关=固定周五），覆盖周一~周日周期，
+// 周末工作靠之后手动重生成补入。
 func TestReportPeriodWeeklyMondayStart(t *testing.T) {
 	if err := timezone.Init("Asia/Shanghai"); err != nil {
 		t.Fatalf("Init: %v", err)

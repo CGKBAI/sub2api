@@ -59,11 +59,12 @@ func NewReportService(reportRepo ReportRepository, settingRepo SettingRepository
 }
 
 // ReportPeriod 根据报告类型与基准时间计算周期边界 [start, end)。
-// 周报为正常自然周 [本周一 00:00, 下周一 00:00)：定时生成为本周最后一个工作日 19:00
-//（skip_holidays 规则，普通周即周五）；周末/假期后有工作 → 之后手动重生成自动补入
-//（会再次自动推飞书），手动生成语义一致（ref 在周内任意时刻 → 该周一~周日报告）。
-// 月报覆盖 ref 所在自然月（选 8 月任意日期 → 生成 8 月月报）；调度器在当月第一个
-// 工作日 19:00 生成上月：ref 由 scheduler 传上月 1 日，手动/定时语义一致。
+// 周报为正常自然周 [本周一 00:00, 下周一 00:00)：定时生成日由 skip_holidays 决定
+//（开=本周最后一个工作日，普通周即周五；关=固定周五）；周末/假期后有工作 →
+// 之后手动重生成自动补入（手动生成不自动推飞书，需用卡片按钮推），
+// ref 在周内任意时刻 → 该周一~周日报告，手动/定时语义一致。
+// 月报覆盖 ref 所在自然月（选 8 月任意日期 → 生成 8 月月报）：开=当月第一个
+// 工作日 19:00 生成上月（ref 由 scheduler 传上月 1 日）；关=每月最后一天出当月（ref=now）。
 func ReportPeriod(reportType string, ref time.Time) (time.Time, time.Time, error) {
 	switch reportType {
 	case domain.ReportTypeDaily:
