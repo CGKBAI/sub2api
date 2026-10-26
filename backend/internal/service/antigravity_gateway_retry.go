@@ -78,12 +78,7 @@ func accountHasAntigravityPaidTier(account *Account) bool {
 	if !ok {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(planType)) {
-	case "pro", "ultra":
-		return true
-	default:
-		return false
-	}
+	return antigravity.IsPaidPlanType(planType)
 }
 
 // smartRetryAction 智能重试的处理结果
@@ -548,6 +543,8 @@ urlFallbackLoop:
 			if err != nil {
 				safeErr := sanitizeUpstreamErrorMessage(err.Error())
 				appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(p.account),
+					ProxyName:          opsUpstreamProxyName(p.account),
 					Platform:           p.account.Platform,
 					AccountID:          p.account.ID,
 					AccountName:        p.account.Name,
@@ -625,6 +622,8 @@ urlFallbackLoop:
 						upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
 						upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 						appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{
+							ProxyID:            opsUpstreamProxyID(p.account),
+							ProxyName:          opsUpstreamProxyName(p.account),
 							Platform:           p.account.Platform,
 							AccountID:          p.account.ID,
 							AccountName:        p.account.Name,
@@ -660,6 +659,8 @@ urlFallbackLoop:
 						upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
 						upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 						appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{
+							ProxyID:            opsUpstreamProxyID(p.account),
+							ProxyName:          opsUpstreamProxyName(p.account),
 							Platform:           p.account.Platform,
 							AccountID:          p.account.ID,
 							AccountName:        p.account.Name,
@@ -849,10 +850,12 @@ func sleepAntigravityBackoffWithContext(ctx context.Context, attempt int) bool {
 	}
 }
 
-// isSingleAccountRetry 检查 context 中是否设置了单账号退避重试标记
+// isSingleAccountRetry 检查是否处于单账号退避重试模式：显式标记优先，否则使用请求挂载的延迟判定。
 func isSingleAccountRetry(ctx context.Context) bool {
-	v, _ := SingleAccountRetryFromContext(ctx)
-	return v
+	if v, ok := SingleAccountRetryFromContext(ctx); ok {
+		return v
+	}
+	return singleAccountRetryProbeResult(ctx)
 }
 
 // setModelRateLimitByModelName 使用官方模型 ID 设置模型级限流
