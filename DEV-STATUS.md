@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-09-20 晚（**v3.9 周报/月报发布日抑制日报飞书推送已上线生产 stable 33333**：日报照常生成但不自动推，防群消息刷屏，见 §8 v3.9；同日 v3.8 页头开关+关模式语义、v3.7 定时 19:00+节假日感知）。
+> 本文档是完整项目上下文。最后更新：2026-11-03（**v4.0 DeepSeek Search/Fetch 独立工具接口已上线生产 stable 33333**：仅原生 DeepSeek 分组可用，按成功调用计费 0.005/次，见 §8 v4.0；上一轮 v3.9 周报/月报发布日抑制日报飞书推送）。
 
 ## 1. 功能与当前状态总览
 
@@ -15,6 +15,7 @@
 7. ✅ **审计表 session 维度**（2026-09-16 晚）：迁移 234 给 prompt_audit_jobs/events 加 session_id（取自请求头 `ExtractClientSessionID` 单一入口），部分索引 (user_id, session_id, created_at)；Request→job→event 全链路穿透。注意：session_id 与 usage_logs 同源（客户端上报），历史数据为空
 8. ✅ **报告链路 v2+v3**（2026-09-16/17，v3 已上线 stable）：①日报素材按 session 分组总结（`FetchPromptSnapshots`，session_id 自 9/16 17:54 起入库）——上线保留；②周报周期=**正常周一~周日**（v2 的周六周期已回滚，`StartOfWeekSaturday` 已删除），周五 20:10 定时生成覆盖周一~周五、周末工作后续手动重生成补入；③月报=**ref 所在自然月**（前端选 8 月出 8 月；调度器 1 日传上月 1 日生成上月）；④前端周报按周下拉选（近 12 周）、月报按月选（admin/user 双视图）；⑤**手动生成永不自动推飞书**（v3.1，`ReportTrigger` manual/scheduled），定时生成按类型开关+用户参与开关自动推；⑥月报聚合与当月有交集的周报（pageSize 8）
 9. ✅ **飞书推送**（2026-09-17 已上线生产）：群自定义机器人 Webhook + interactive 卡片；生成成功自动推（类型开关+用户开关）+ 手动按钮（本人/admin）；commit 7c3f80740，见 §10
+10. ✅ **DeepSeek Search/Fetch**（2026-11-03 已上线生产）：`POST /v1/tools/search`、`POST /v1/tools/fetch`，仅原生 DeepSeek 分组（Composite 等一律 404）；复用调度器只选 DeepSeek API Key 账号；请求/成功响应原样转发；200 且有 results/content 才按次计费（默认 0.005，可覆盖/免费/倍率），Search query 走提示词审计，见 §8 v4.0
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -151,6 +152,10 @@ docker compose up -d sub2api
 - `backend/internal/repository/report_repo.go`（usage_logs 聚合 + prompt 拉取均原生 SQL）
 - `backend/internal/handler/dto/report.go`、`handler/admin/report_handler.go`、`handler/user_report_handler.go`
 - 前端：`api/admin/reports.ts|api/reports.ts`（共享 `ReportType` 类型）、`views/admin|user/ReportsView.vue`（三 tab：日/周/月 + 月报 cron 配置）、i18n `zh|en/admin/reports.ts`
+
+**DeepSeek Search/Fetch（v4.0，2026-11-03）**：
+- 新增：`backend/internal/handler/openai_deepseek_tools.go`（+`_test.go`）、`backend/internal/service/openai_gateway_deepseek_tools.go`（+`_test.go`）
+- 修改挂载点：`routes/gateway.go`（`/tools/search`、`/tools/fetch` + 平台 404 门）、`service/account.go`（`OpenAIEndpointCapabilityDeepSeekTools`）、`service/billing_service.go|billing_inflight_reservation.go|media_price_config.go|openai_gateway_usage.go|openai_gateway_service.go`（按平台默认价 + 按次计费/inflight）、`service/group.go`（注释）、前端 `GroupsView.vue` + i18n `zh|en/admin/overview.ts`、路由/审计覆盖测试
 
 **修改官方文件（挂载点）**：`config.go`（ReportConfig）、`handler.go|handler/wire.go`、`service/wire.go`、`repository/wire.go`、`routes/admin.go|user.go`、`cmd/server/wire.go`（cleanup）、`domain_constants.go`（SettingKeyReportConfig）、router/index.ts、AppSidebar.vue（ReportIcon）、i18n common.ts nav + admin/index.ts ×2、go.mod/go.sum（wire cmd indirect）
 
@@ -294,6 +299,19 @@ docker compose up -d sub2api
 - [x] handler 两处手动调用点补 `false`；前端无 UI 变化，仅 `autoPushHint` 文案补充抑制规则说明（zh/en）
 - [x] 验证：go build/vet/test + vue-tsc EXIT=0 → buildx dev → 33336 冒烟（healthy/无 panic/二进制含抑制日志特征）→ stable 33333 发布 → commit + push fork
 - 注：抑制条件=「周报/月报当天定时发布」；用户级 report_push_enabled、类型开关等原有条件不变；抑制只作用于自动推送，报告生成与推送状态落库（pushed_at 不写）不受影响
+
+### v4.0：DeepSeek Search / Fetch 独立工具接口（2026-11-03 已上线）
+
+> 背景：DeepSeek 提供独立的 Search（网页搜索）与 Fetch（URL 抓取）HTTP API，需要作为网关工具接口透传并按成功调用计费。决策（用户确认）：仅原生 DeepSeek 分组可用；请求体原样转发；只有真正产生结果的调用计费；空结果与失败不计费；默认 0.005/次并复用 `web_search_price_per_call` 覆盖机制。
+
+- 路由：`POST /v1/tools/search`、`POST /v1/tools/fetch`（`routes/gateway.go`）；非 DeepSeek 分组（含 Composite）统一 404——Composite 请求体没有 model 字段可路由，且 handler 双重校验原始分组平台
+- 调度：新增 `OpenAIEndpointCapabilityDeepSeekTools`，`SupportsOpenAIEndpointCapability` 仅允许 `PlatformDeepseek + AccountTypeAPIKey`；复用 `SelectAccountWithSchedulerForCapability`，上游 URL = 账号 `GetOpenAIFormatBaseURL()` + `/v1/tools/{search,fetch}`，请求体、成功响应状态/响应体/主要响应头原样返回
+- 错误：401→账号置错误；402→余额不足临时停调；429→冷却；408/429/5xx→换账号重试（最多 3 次）；其他 4xx→原样返回上游错误，不重试
+- 计费：仅 HTTP 200 且 Search `results` 非空 / Fetch `content` 非空时记 1 次 `WebSearchCalls`；空结果仍返回 200，但不落用量日志；用量 model 为 `deepseek-search` / `deepseek-fetch`，默认 0.005/次（`defaultDeepSeekToolPricePerCall`），分组 `web_search_price_per_call` 可覆盖（0 免费），叠加分组倍率；inflight 预估同步接入
+- 审计：Search 的 `query` 复用现有提示词审计（OpenAI Chat 协议），Fetch 仅 URL 不做文本提示词审计；路由覆盖测试将 `/tools/search` 归入审计、`/tools/fetch` 归入排除
+- 管理端：DeepSeek 分组显示「搜索与抓取计费」，占位/预览默认 0.005；OpenAI 分组维持 0.01
+- 测试：新增 service/handler/route 单测（能力筛选、字节级转发、空结果不计费、错误映射、计费默认/覆盖/免费、平台隔离）；go build/vet + service/handler/routes 全量单测全绿；vue-tsc EXIT=0
+- 发布：dev 镜像 → 33336 冒烟（健康、路由注册、二进制含新前端文案）→ stable 33333 发布（无新迁移）
 
 ### 后续迭代
 
