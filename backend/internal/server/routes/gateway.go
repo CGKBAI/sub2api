@@ -316,6 +316,18 @@ func RegisterGatewayRoutes(
 			}
 			h.OpenAIGateway.GrokRealtime(c)
 		})
+		deepSeekToolHandler := func(endpoint service.DeepSeekToolEndpoint) gin.HandlerFunc {
+			return func(c *gin.Context) {
+				if getGroupPlatform(c) != service.PlatformDeepseek {
+					service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+					c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found_error", "message": "Search and Fetch APIs are not supported for this platform"}})
+					return
+				}
+				h.OpenAIGateway.DeepSeekTool(c, endpoint)
+			}
+		}
+		gateway.POST("/tools/search", textBodyLimit, deepSeekToolHandler(service.DeepSeekToolSearch))
+		gateway.POST("/tools/fetch", textBodyLimit, deepSeekToolHandler(service.DeepSeekToolFetch))
 		gateway.POST("/web_search", func(c *gin.Context) {
 			if getGroupPlatform(c) != service.PlatformGrok {
 				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)

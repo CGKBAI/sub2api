@@ -377,6 +377,8 @@ type InflightEstimateRequest struct {
 	Units int
 	// SearchCalls 叠加的搜索次数（按分组 search_price_per_1k 计）。
 	SearchCalls int
+	// WebSearchCalls 按分组 web_search_price_per_call 计（DeepSeek Search/Fetch）。
+	WebSearchCalls int
 	// 视频：分辨率与时长（秒）。
 	VideoResolution      string
 	VideoDurationSeconds int
@@ -624,6 +626,13 @@ func (d inflightEstimateDeps) estimateOne(ctx context.Context, apiKey *APIKey, m
 	if req.SearchCalls > 0 {
 		if d.billing != nil {
 			if b := d.billing.CalculateSearchCost(req.SearchCalls, groupSearchPricePer1kFromAPIKey(apiKey), textRate); b != nil && b.ActualCost > 0 {
+				cost += b.ActualCost
+			}
+		}
+	}
+	if req.WebSearchCalls > 0 {
+		if d.billing != nil {
+			if b := d.billing.CalculateWebSearchCostWithDefault(req.WebSearchCalls, webSearchPricePerCallFromAPIKey(apiKey), textRate, webSearchDefaultPricePerCallFromAPIKey(apiKey)); b != nil && b.ActualCost > 0 {
 				cost += b.ActualCost
 			}
 		}

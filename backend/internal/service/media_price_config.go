@@ -50,6 +50,13 @@ func webSearchPricePerCallFromAPIKey(apiKey *APIKey) *float64 {
 	return apiKey.Group.WebSearchPricePerCall
 }
 
+func webSearchDefaultPricePerCallFromAPIKey(apiKey *APIKey) float64 {
+	if apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == PlatformDeepseek {
+		return defaultDeepSeekToolPricePerCall
+	}
+	return defaultWebSearchPricePerCall
+}
+
 func groupSearchPricePer1kFromAPIKey(apiKey *APIKey) *float64 {
 	if apiKey == nil || apiKey.Group == nil {
 		return nil
