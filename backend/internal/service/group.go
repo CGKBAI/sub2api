@@ -62,7 +62,8 @@ type Group struct {
 	// When set for a model, overrides VideoPrice* for that model only.
 	VideoModelPrices map[string]map[string]float64
 	// Codex alpha/search 网页搜索单次价格（USD/次，仅 openai 平台使用）；
-	// nil 表示使用默认价 defaultWebSearchPricePerCall（官方 $10/1000 次）。
+	// nil 表示使用平台默认价：OpenAI/Codex defaultWebSearchPricePerCall，
+	// DeepSeek Search/Fetch defaultDeepSeekToolPricePerCall。
 	WebSearchPricePerCall *float64
 
 	// 搜索工具显式定价（per 1k calls）。

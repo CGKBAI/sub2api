@@ -52,25 +52,77 @@ git push -u fork feature/daily-weekly-reports
 # 以后每次 commit 后：git push fork feature/daily-weekly-reports
 ```
 
-## 4. 开发循环（新 session 按 此操作）
+## 4. 开发循环（新 session 按此操作）
+
+### 4.1 路径与数据
+
+| 项目 | 路径 | 说明 |
+|---|---|---|
+| 源码 | `/home/xxy/fs/sub2api` | 开发分支 `feature/daily-weekly-reports` |
+| 部署目录 | `/home/xxy/sub2api-deploy` | compose、`.env`、数据目录 |
+| PostgreSQL 数据 | `/home/xxy/sub2api-deploy/postgres_data` | 容器内 `/var/lib/postgresql/data`（`PGDATA`） |
+| Redis 数据 | `/home/xxy/sub2api-deploy/redis_data` | 容器内 `/data` |
+| 应用数据 | `/home/xxy/sub2api-deploy/data` | 容器内 `/app/data` |
+
+- dev（33336）和 prod（33333）**共用同一个 PostgreSQL/Redis**。
+- dev 启动会执行迁移，所以迁移必须纯增量；dev 写的报告、配置、审计数据 prod 立即可见。
+- dev 必须 `REPORT_SCHEDULER_ENABLED=false`；只有 prod 跑定时任务。
+
+### 4.2 改代码 → dev 验证 → 发布 prod
 
 ```bash
-# 1. 改代码：/home/xxy/fs/sub2api
-# 2. 构建开发镜像（有缓存约 1-2 分钟）
+# 1. 改代码
+cd /home/xxy/fs/sub2api
+git checkout feature/daily-weekly-reports
+
+# 2. 构建 dev 镜像（镜像构建时编译前后端，有缓存约 1-2 分钟）
 docker buildx build --load -t sub2api:dev /home/xxy/fs/sub2api
-# 3. 刷新开发实例，浏览器验证 http://127.0.0.1:33336
-cd /home/xxy/sub2api-deploy && docker compose -f docker-compose.dev.yml up -d --force-recreate
-# 4. 验证满意 → 发布生产（约 20 秒中断）
-docker tag sub2api:dev sub2api:stable && cd /home/xxy/sub2api-deploy && docker compose up -d sub2api
-# 回退：改主 compose image 回 weishaw/sub2api:latest up -d（注意：无审计落库修复，会丢消息）
+
+# 3. 重建 dev 容器
+cd /home/xxy/sub2api-deploy
+docker compose -f docker-compose.dev.yml up -d --force-recreate
+
+# 4. 验证 dev（33336 仅本机）
+curl -fsS http://127.0.0.1:33336/health
+docker logs --tail 50 sub2api-dev
+# 浏览器验证 http://127.0.0.1:33336
+
+# 5. 发布前备份当前 stable 镜像 tag（重要）
+docker tag sub2api:stable sub2api:stable-backup-$(date +%Y%m%d-%H%M)
+
+# 6. dev 验证通过 → 给同一个镜像打 stable 标签（不是重新构建）
+docker tag sub2api:dev sub2api:stable
+
+# 7. 重建生产容器（约 20 秒中断）
+docker compose up -d sub2api
+
+# 8. 验证生产
+docker compose ps
+curl -fsS http://127.0.0.1:33333/health
+docker logs --tail 50 sub2api
 ```
 
-**纪律**：
+### 4.3 回退
+
+```bash
+# 用发布前备份的 tag 回退（日期替换为实际备份 tag）
+docker tag sub2api:stable-backup-YYYYMMDD-HHMM sub2api:stable
+cd /home/xxy/sub2api-deploy
+docker compose up -d sub2api
+```
+
+- **不要**回退到官方 `weishaw/sub2api:latest`：会丢失审计落库修复和 reports 功能。
+- 数据库迁移不会自动回滚；迁移必须纯增量，旧镜像才能继续跑在新库上。
+
+### 4.4 纪律
+
 - 改 ent schema / wire 后先 `docker run --rm -v /home/xxy/fs/sub2api/backend:/app -w /app -e GOFLAGS=-buildvcs=false golang:1.27.0-alpine sh -c "apk add --no-cache git >/dev/null 2>&1 && go get github.com/google/wire/cmd/wire@v0.7.0 >/dev/null 2>&1 && make generate"`，生成物提交仓库
 - 编译验证**不要用管道吃退出码**：`go build ./... > /log 2>&1; echo $?`
 - **前端容器操作必须钉 pnpm@9**（`corepack prepare pnpm@9 --activate`，与 Dockerfile 一致）：corepack 默认的 pnpm v10 会重写 pnpm-lock.yaml、生成 pnpm-workspace.yaml、禁用 build scripts，导致镜像构建（--frozen-lockfile）失败
 - **新迁移必须纯增量**（只建新表/加可空列）：dev 启动会在共享库跑迁移，stable 共存
-- 审计 worker 双实例都消费队列（都有"必存"修复，无丢失风险）
+- **dev 和 prod 共用 `settings` 表**：在 33336 改 LLM/飞书/节假日配置会热加载到 33333；手动生成/推送会写生产 `reports` 表、发真实飞书群
+- 审计 worker 双实例都消费队列（都有“必存”修复，无丢失风险）
+- 不要执行 `docker image prune -a`：会删掉 `sub2api:stable-backup-*` 回退镜像
 
 ## 5. Prompt 存储事实（已核实）
 

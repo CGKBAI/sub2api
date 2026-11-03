@@ -1130,10 +1130,10 @@ export default {
         pricePlaceholder: 'optional'
       },
       webSearchPricing: {
-        title: 'Codex Web Search Pricing',
-        pricePerCall: 'Price per search call (USD)',
+        title: 'Search & Fetch Pricing',
+        pricePerCall: 'Price per successful call (USD)',
         pricePerCallHint:
-          'Leave empty to use the default $0.01 per call (official pricing: $10 per 1,000 calls); 0 means free. The group rate multiplier is applied on top.',
+          'Leave empty to use the platform default: Codex $0.01/call, DeepSeek Search/Fetch $0.005/call. 0 means free. The group rate multiplier is applied on top.',
         finalPricePreview: 'Per-call price after current multiplier: {price}'
       },
       peakRate: {

@@ -1454,9 +1454,9 @@
           </div>
         </div>
 
-        <!-- Codex 网页搜索按次计费（仅 openai 平台） -->
+        <!-- OpenAI/DeepSeek 搜索与抓取按成功请求计费 -->
         <div
-          v-if="createForm.platform === 'openai'"
+          v-if="createForm.platform === 'openai' || createForm.platform === 'deepseek'"
           class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4"
         >
           <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
@@ -1471,7 +1471,7 @@
               type="number"
               step="0.001"
               min="0"
-              placeholder="0.01"
+              :placeholder="createForm.platform === 'deepseek' ? '0.005' : '0.01'"
               class="input"
             />
             <p class="input-hint">
@@ -3108,9 +3108,9 @@
           </div>
         </div>
 
-        <!-- Codex 网页搜索按次计费（仅 openai 平台） -->
+        <!-- OpenAI/DeepSeek 搜索与抓取按成功请求计费 -->
         <div
-          v-if="editForm.platform === 'openai'"
+          v-if="editForm.platform === 'openai' || editForm.platform === 'deepseek'"
           class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4"
         >
           <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
@@ -3125,7 +3125,7 @@
               type="number"
               step="0.001"
               min="0"
-              placeholder="0.01"
+              :placeholder="editForm.platform === 'deepseek' ? '0.005' : '0.01'"
               class="input"
             />
             <p class="input-hint">
@@ -5541,16 +5541,23 @@ const editVideoFinalPricePreview = computed(() =>
   buildVideoFinalPricePreview(editForm),
 );
 
-// Codex 网页搜索单次默认价（与后端 defaultWebSearchPricePerCall 一致，官方 $10/1000 次）
+// 与后端 defaultWebSearchPricePerCall / defaultDeepSeekToolPricePerCall 保持一致。
 const DEFAULT_WEB_SEARCH_PRICE_PER_CALL = 0.01;
+const DEFAULT_DEEPSEEK_TOOL_PRICE_PER_CALL = 0.005;
+
+const defaultWebSearchPriceForPlatform = (platform: string) =>
+  platform === "deepseek"
+    ? DEFAULT_DEEPSEEK_TOOL_PRICE_PER_CALL
+    : DEFAULT_WEB_SEARCH_PRICE_PER_CALL;
 
 const buildWebSearchFinalPricePreview = (form: {
+  platform: string;
   web_search_price_per_call: number | string | null;
   rate_multiplier: number | string | null;
 }) => {
   const basePrice =
     parsePreviewPrice(form.web_search_price_per_call) ??
-    DEFAULT_WEB_SEARCH_PRICE_PER_CALL;
+    defaultWebSearchPriceForPlatform(form.platform);
   const multiplier = normalizePreviewNumber(form.rate_multiplier, 1);
   return formatImagePricePreview(basePrice * multiplier);
 };

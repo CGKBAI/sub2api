@@ -94,6 +94,63 @@ func TestGatewayRoutesOpenAIAlphaSearchPathsAreRegistered(t *testing.T) {
 	}
 }
 
+func TestGatewayRoutesDeepSeekToolPathsAreRegistered(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformDeepseek)
+	registered := make(map[string]bool)
+	for _, route := range router.Routes() {
+		if route.Method == http.MethodPost {
+			registered[route.Path] = true
+		}
+	}
+
+	for _, path := range []string{"/v1/tools/search", "/v1/tools/fetch"} {
+		require.True(t, registered[path], "POST %s should be registered", path)
+	}
+}
+
+func TestGatewayRoutesDeepSeekToolsOnlyAcceptDeepSeekGroups(t *testing.T) {
+	for _, platform := range []string{service.PlatformOpenAI, service.PlatformGrok, service.PlatformAnthropic, service.PlatformComposite} {
+		t.Run(platform, func(t *testing.T) {
+			router := newGatewayRoutesTestRouter(platform)
+			for _, path := range []string{"/v1/tools/search", "/v1/tools/fetch"} {
+				req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"query":"latest news"}`))
+				req.Header.Set("Content-Type", "application/json")
+				w := httptest.NewRecorder()
+
+				router.ServeHTTP(w, req)
+
+				require.Equal(t, http.StatusNotFound, w.Code, "path=%s", path)
+				require.Contains(t, w.Body.String(), "not_found_error")
+				require.Contains(t, w.Body.String(), "Search and Fetch APIs are not supported for this platform")
+			}
+		})
+	}
+
+	t.Run("composite with model still rejected", func(t *testing.T) {
+		router := newGatewayRoutesTestRouter(service.PlatformComposite)
+		req := httptest.NewRequest(http.MethodPost, "/v1/tools/search", strings.NewReader(`{"model":"deepseek-chat","query":"latest news"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusNotFound, w.Code)
+		require.Contains(t, w.Body.String(), "not_found_error")
+	})
+
+	t.Run(service.PlatformDeepseek, func(t *testing.T) {
+		router := newGatewayRoutesTestRouter(service.PlatformDeepseek)
+		req := httptest.NewRequest(http.MethodPost, "/v1/tools/search", strings.NewReader(`{"query":"latest news"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		require.NotEqual(t, http.StatusNotFound, w.Code)
+		require.NotContains(t, w.Body.String(), "Search and Fetch APIs are not supported for this platform")
+	})
+}
+
 func TestGatewayRoutesAlphaSearchRejectsUnsupportedGroup(t *testing.T) {
 	router := newGatewayRoutesTestRouter(service.PlatformGrok)
 	req := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"model":"gpt-5.6-sol"}`))
