@@ -42,8 +42,38 @@ export interface Report {
   error?: string
   pushed_at?: string
   last_push_error?: string
+  push_deliveries?: ReportPushDelivery[]
   created_at: string
   updated_at: string
+}
+
+export interface ReportPushDelivery {
+  group_id: number
+  group_name: string
+  status: 'success' | 'failed'
+  error?: string
+  attempted_at: string
+  attempt_count: number
+}
+
+export interface ReportFeishuGroup {
+  id: number
+  name: string
+  webhook_url: string
+  secret?: string
+  enabled: boolean
+  member_count: number
+  user_ids?: number[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ReportFeishuGroupPayload {
+  name?: string
+  webhook_url?: string
+  secret?: string
+  enabled?: boolean
+  user_ids?: number[]
 }
 
 export interface ReportLLMConfig {
@@ -133,5 +163,57 @@ export async function pushToFeishu(id: number): Promise<Report> {
   return data
 }
 
-const reportsAPI = { list, getById, generate, generateAll, getConfig, updateConfig, pushToFeishu }
+// ===================== 报告群组 =====================
+
+export async function listGroups(): Promise<ReportFeishuGroup[]> {
+  const { data } = await apiClient.get<ReportFeishuGroup[]>('/admin/reports/groups')
+  return data
+}
+
+export async function getGroup(id: number): Promise<ReportFeishuGroup> {
+  const { data } = await apiClient.get<ReportFeishuGroup>(`/admin/reports/groups/${id}`)
+  return data
+}
+
+export async function createGroup(payload: ReportFeishuGroupPayload): Promise<ReportFeishuGroup> {
+  const { data } = await apiClient.post<ReportFeishuGroup>('/admin/reports/groups', payload)
+  return data
+}
+
+export async function updateGroup(
+  id: number,
+  payload: ReportFeishuGroupPayload
+): Promise<ReportFeishuGroup> {
+  const { data } = await apiClient.put<ReportFeishuGroup>(`/admin/reports/groups/${id}`, payload)
+  return data
+}
+
+export async function deleteGroup(id: number): Promise<void> {
+  await apiClient.delete(`/admin/reports/groups/${id}`)
+}
+
+export async function setGroupMembers(id: number, userIds: number[]): Promise<void> {
+  await apiClient.put(`/admin/reports/groups/${id}/members`, { user_ids: userIds })
+}
+
+export async function testGroup(id: number): Promise<void> {
+  await apiClient.post(`/admin/reports/groups/${id}/test`)
+}
+
+const reportsAPI = {
+  list,
+  getById,
+  generate,
+  generateAll,
+  getConfig,
+  updateConfig,
+  pushToFeishu,
+  listGroups,
+  getGroup,
+  createGroup,
+  updateGroup,
+  deleteGroup,
+  setGroupMembers,
+  testGroup
+}
 export default reportsAPI

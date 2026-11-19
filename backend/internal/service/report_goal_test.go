@@ -82,7 +82,7 @@ func runGoalBuildSummary(t *testing.T, reportType, goal string) (sys, user strin
 	t.Helper()
 	var captured []reportLLMMessage
 	srv := newReportGoalLLMStub(t, &captured)
-	svc := NewReportService(&reportGoalFakeRepo{goal: goal}, nil)
+	svc := NewReportService(&reportGoalFakeRepo{goal: goal}, nil, nil)
 
 	cfg := &ReportLLMConfig{Enabled: true, BaseURL: srv.URL, APIKey: "sk-test", Model: "test-model"}
 	normalizeReportLLMConfig(cfg)

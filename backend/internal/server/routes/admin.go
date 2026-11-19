@@ -146,6 +146,14 @@ func registerReportRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		reports.PUT("/config", h.Admin.Reports.UpdateConfig)
 		reports.POST("/generate", h.Admin.Reports.Generate)
 		reports.POST("/generate-all", h.Admin.Reports.GenerateAll)
+		// 报告群组管理（静态路由需先于 /:id 注册）
+		reports.GET("/groups", h.Admin.Reports.ListGroups)
+		reports.POST("/groups", h.Admin.Reports.CreateGroup)
+		reports.GET("/groups/:id", h.Admin.Reports.GetGroup)
+		reports.PUT("/groups/:id", h.Admin.Reports.UpdateGroup)
+		reports.DELETE("/groups/:id", h.Admin.Reports.DeleteGroup)
+		reports.PUT("/groups/:id/members", h.Admin.Reports.SetGroupMembers)
+		reports.POST("/groups/:id/test", h.Admin.Reports.TestGroup)
 		reports.POST("/:id/push", h.Admin.Reports.Push)
 		reports.GET("/:id", h.Admin.Reports.GetByID)
 	}

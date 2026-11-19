@@ -100,12 +100,32 @@ async function togglePush(enabled: boolean) {
 async function pushToFeishu(report: Report) {
   pushingReportId.value = report.id
   try {
-    await userReportsAPI.pushMyReportToFeishu(report.id)
-    appStore.showSuccess(t('admin.reports.actions.pushSuccess'))
+    const updated = await userReportsAPI.pushMyReportToFeishu(report.id)
+    const deliveries = updated.push_deliveries ?? []
+    const ok = deliveries.filter((d) => d.status === 'success').length
+    if (deliveries.length > 0) {
+      appStore.showSuccess(t('admin.reports.push.pushSuccessCount', { ok, total: deliveries.length }))
+    } else {
+      appStore.showSuccess(t('admin.reports.actions.pushSuccess'))
+    }
+    await load()
   } catch (error: any) {
     appStore.showError(error?.message || String(error))
   } finally {
     pushingReportId.value = null
+  }
+}
+
+function pushDeliverySummary(report: Report) {
+  const deliveries = report.push_deliveries ?? []
+  if (deliveries.length === 0) return null
+  const ok = deliveries.filter((d) => d.status === 'success').length
+  const failed = deliveries.filter((d) => d.status === 'failed')
+  return {
+    total: deliveries.length,
+    ok,
+    failed: failed.length,
+    detail: failed.map((d) => `${d.group_name || `#${d.group_id}`}: ${d.error || 'failed'}`).join('\n')
   }
 }
 
@@ -267,7 +287,25 @@ const modelEntries = (report: Report) =>
               {{ t(`admin.reports.status.${report.status}`) }}
             </span>
             <span
-              v-if="report.pushed_at"
+              v-if="pushDeliverySummary(report)"
+              class="badge"
+              :class="pushDeliverySummary(report)?.failed === 0 ? 'badge-success' : 'badge-danger'"
+              :title="pushDeliverySummary(report)?.detail || ''"
+            >
+              {{
+                pushDeliverySummary(report)?.failed === 0
+                  ? t('admin.reports.push.pushSuccessCount', {
+                      ok: pushDeliverySummary(report)?.ok,
+                      total: pushDeliverySummary(report)?.total
+                    })
+                  : t('admin.reports.push.pushPartial', {
+                      ok: pushDeliverySummary(report)?.ok,
+                      total: pushDeliverySummary(report)?.total
+                    })
+              }}
+            </span>
+            <span
+              v-else-if="report.pushed_at"
               class="badge badge-success"
               :title="new Date(report.pushed_at).toLocaleString()"
             >

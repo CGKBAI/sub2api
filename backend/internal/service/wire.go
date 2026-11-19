@@ -684,9 +684,10 @@ func ProvideOpsScheduledReportService(
 // ProvideReportService creates the user daily/weekly report service.
 func ProvideReportService(
 	reportRepo ReportRepository,
+	groupRepo ReportGroupRepository,
 	settingRepo SettingRepository,
 ) *ReportService {
-	return NewReportService(reportRepo, settingRepo)
+	return NewReportService(reportRepo, groupRepo, settingRepo)
 }
 
 // ProvideReportSchedulerService creates and starts the report scheduler.

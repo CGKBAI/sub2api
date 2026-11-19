@@ -26,7 +26,40 @@ var (
 
 	ErrReportFeishuNotConfigured = infraerrors.BadRequest("REPORT_FEISHU_NOT_CONFIGURED", "feishu push is not configured")
 	ErrReportFeishuPushFailed    = infraerrors.BadRequest("REPORT_FEISHU_PUSH_FAILED", "feishu push failed")
+	ErrReportFeishuNoGroups      = infraerrors.BadRequest("REPORT_FEISHU_NO_GROUPS", "user is not in any enabled report feishu group")
+	ErrReportFeishuGroupNotFound = infraerrors.NotFound("REPORT_FEISHU_GROUP_NOT_FOUND", "report feishu group not found")
+	ErrReportFeishuGroupNameDup  = infraerrors.BadRequest("REPORT_FEISHU_GROUP_NAME_DUPLICATED", "report feishu group name already exists")
+	ErrReportFeishuGroupInvalid  = infraerrors.BadRequest("REPORT_FEISHU_GROUP_INVALID", "report feishu group name and webhook are required")
 )
+
+// 报告飞书投递状态。
+const (
+	ReportPushStatusSuccess = "success"
+	ReportPushStatusFailed  = "failed"
+)
+
+// ReportFeishuGroup 是一个报告推送群组（对应一个飞书群自定义机器人 webhook）。
+type ReportFeishuGroup struct {
+	ID          int64
+	Name        string
+	WebhookURL  string
+	Secret      string
+	Enabled     bool
+	MemberCount int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// ReportPushDelivery 是报告×群组最近一次投递结果。
+type ReportPushDelivery struct {
+	ReportID     int64
+	GroupID      int64
+	GroupName    string
+	Status       string
+	Error        string
+	AttemptedAt  time.Time
+	AttemptCount int
+}
 
 // ReportStats 是 reports.stats 列的 JSON 结构：一个周期内的聚合统计。
 type ReportStats struct {
@@ -62,8 +95,10 @@ type Report struct {
 	// PushedAt 最近一次飞书推送成功时间（nil = 从未推成功）；LastPushError 最近一次推送失败原因
 	PushedAt      *time.Time
 	LastPushError string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// PushDeliveries 报告×群组最近一次投递结果（列表/详情展示用，由服务层批量补齐）
+	PushDeliveries []ReportPushDelivery
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // IsWeekly 报告是否为周报。

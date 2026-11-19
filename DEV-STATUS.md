@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-11-03（**v4.0 DeepSeek Search/Fetch 独立工具接口已上线生产 stable 33333**：仅原生 DeepSeek 分组可用，按成功调用计费 0.005/次，见 §8 v4.0；上一轮 v3.9 周报/月报发布日抑制日报飞书推送）。
+> 本文档是完整项目上下文。最后更新：2026-11-19（**v4.1 飞书多群推送已上线生产 stable 33333**：报告按用户所属群组投递，一人可属于多个部门群；迁移 249 新增群组/成员/投递记录三表，原全局 webhook 自动迁移为「计算群」，见 §8 v4.1）。
 
 ## 1. 功能与当前状态总览
 
@@ -16,6 +16,7 @@
 8. ✅ **报告链路 v2+v3**（2026-09-16/17，v3 已上线 stable）：①日报素材按 session 分组总结（`FetchPromptSnapshots`，session_id 自 9/16 17:54 起入库）——上线保留；②周报周期=**正常周一~周日**（v2 的周六周期已回滚，`StartOfWeekSaturday` 已删除），周五 20:10 定时生成覆盖周一~周五、周末工作后续手动重生成补入；③月报=**ref 所在自然月**（前端选 8 月出 8 月；调度器 1 日传上月 1 日生成上月）；④前端周报按周下拉选（近 12 周）、月报按月选（admin/user 双视图）；⑤**手动生成永不自动推飞书**（v3.1，`ReportTrigger` manual/scheduled），定时生成按类型开关+用户参与开关自动推；⑥月报聚合与当月有交集的周报（pageSize 8）
 9. ✅ **飞书推送**（2026-09-17 已上线生产）：群自定义机器人 Webhook + interactive 卡片；生成成功自动推（类型开关+用户开关）+ 手动按钮（本人/admin）；commit 7c3f80740，见 §10
 10. ✅ **DeepSeek Search/Fetch**（2026-11-03 已上线生产）：`POST /v1/tools/search`、`POST /v1/tools/fetch`，仅原生 DeepSeek 分组（Composite 等一律 404）；复用调度器只选 DeepSeek API Key 账号；请求/成功响应原样转发；200 且有 results/content 才按次计费（默认 0.005，可覆盖/免费/倍率），Search query 走提示词审计，见 §8 v4.0
+11. ✅ **飞书多群推送**（2026-11-19 已上线生产）：新增 `report_feishu_groups` / `report_feishu_group_members` / `report_feishu_deliveries` 三表；定时与手动推送都按报告作者所属的**所有启用群组**投递（同一 webhook 去重），单群失败不影响其他群；原全局 webhook 自动迁移为「计算群」，仅当时 `report_push_enabled=true` 的 13 个用户入组；管理员在报告页「报告群组」tab 维护群与成员，见 §8 v4.1
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -140,7 +141,7 @@ docker compose up -d sub2api
 |---|---|
 | `risk_control_enabled` | true |
 | `prompt_audit_config` | 异步审计（async，不阻断），审计节点：**MiniMax** `https://api.minimaxi.com` + `MiniMax-M2`（账号 id=5 的 key，AES-256-GCM 加密存 token_ciphertext，密钥=.env 的 TOTP_ENCRYPTION_KEY），input_limit=2000，timeout=15000ms |
-| `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=60，单条截断 800 字符，日报/周报/月报 cron 均 `0 19 * * *`（仅时分生效），skip_holidays=true（**admin 报告页页头按钮运行时切换**；开=工作日规则，关=日报每天+当日请求>10 条阈值/周报周五/月报月底出当月；存量 JSON 缺字段时 cron 读取自动补默认，skip_holidays 缺省=false 需 SQL 或按钮显式写入） |
+| `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=60，单条截断 800 字符，日报/周报/月报 cron 均 `0 19 * * *`（仅时分生效），skip_holidays=true（**admin 报告页页头按钮运行时切换**；开=工作日规则，关=日报每天+当日请求>10 条阈值/周报周五/月报月底出当月；存量 JSON 缺字段时 cron 读取自动补默认，skip_holidays 缺省=false 需 SQL 或按钮显式写入）；飞书仅保留 `feishu_enabled` + 三类型开关，`feishu_webhook_url`/`feishu_secret` 字段保留作回滚兜底但**新代码不再读取**（群组 webhook 见 `report_feishu_groups`） |
 
 配置修改：直接 UPDATE settings 表（ConfigManager 每 5 秒 TTL reload，无需重启）；endpoint token 必须先用 TOTP_ENCRYPTION_KEY 做 AES-256-GCM 加密（base64(nonce+ct+tag)，node crypto 可做）。
 
@@ -156,6 +157,10 @@ docker compose up -d sub2api
 **DeepSeek Search/Fetch（v4.0，2026-11-03）**：
 - 新增：`backend/internal/handler/openai_deepseek_tools.go`（+`_test.go`）、`backend/internal/service/openai_gateway_deepseek_tools.go`（+`_test.go`）
 - 修改挂载点：`routes/gateway.go`（`/tools/search`、`/tools/fetch` + 平台 404 门）、`service/account.go`（`OpenAIEndpointCapabilityDeepSeekTools`）、`service/billing_service.go|billing_inflight_reservation.go|media_price_config.go|openai_gateway_usage.go|openai_gateway_service.go`（按平台默认价 + 按次计费/inflight）、`service/group.go`（注释）、前端 `GroupsView.vue` + i18n `zh|en/admin/overview.ts`、路由/审计覆盖测试
+
+**飞书多群推送（v4.1，2026-11-19）**：
+- 新增：`migrations/249_report_feishu_groups.sql`、`service/report_feishu_group.go`（+`_test.go`）、`repository/report_group_repo.go`、`handler/dto/report_group.go`
+- 修改挂载点：`domain/report.go`（群组/投递类型 + 迁移错误）、`service/report.go`（ReportGroupRepository）、`service/report_service.go`（构造器注入 groupRepo、多群推送、列表补齐投递）、`service/report_feishu.go`（PushTestCard/pushCard 抽取）、`handler/admin/report_handler.go`（群组 CRUD/成员/测试接口、config 保存忽略脱敏占位符）、`handler/dto/report.go`、`server/routes/admin.go`、`repository/wire.go`、`service/wire.go`
 
 **修改官方文件（挂载点）**：`config.go`（ReportConfig）、`handler.go|handler/wire.go`、`service/wire.go`、`repository/wire.go`、`routes/admin.go|user.go`、`cmd/server/wire.go`（cleanup）、`domain_constants.go`（SettingKeyReportConfig）、router/index.ts、AppSidebar.vue（ReportIcon）、i18n common.ts nav + admin/index.ts ×2、go.mod/go.sum（wire cmd indirect）
 
@@ -313,6 +318,19 @@ docker compose up -d sub2api
 - 测试：新增 service/handler/route 单测（能力筛选、字节级转发、空结果不计费、错误映射、计费默认/覆盖/免费、平台隔离）；go build/vet + service/handler/routes 全量单测全绿；vue-tsc EXIT=0
 - 发布：dev 镜像 → 33336 冒烟（健康、路由注册、二进制含新前端文案）→ stable 33333 发布（无新迁移）
 
+### v4.1：飞书多群推送（2026-11-19 已上线）
+
+> 背景：日报目前只发一个飞书群，但有人身兼多个部门，其报告也需要发到其他部门群。决策（用户确认）：①按「每人日报各推各群」投递（不是部门汇总卡）；②新增报告群组管理页维护群 + 成员；③现有 webhook 迁移为普通群组「计算群」，当时已勾选自动推送的用户入组；④手动按钮发到报告作者所属所有群；⑤每个群独立记录投递结果；⑥日/周/月都发，沿用全局类型开关。
+
+- 迁移 249：`report_feishu_groups`（群名唯一 + webhook/secret/enabled）、`report_feishu_group_members`（多对多）、`report_feishu_deliveries`（report×group 唯一 + attempt_count）；纯增量，旧镜像兼容。初始化从 `settings.report_config` 复制 webhook/secret 建「计算群」，把 `report_push_enabled=true` 的 13 个用户加入
+- 推送路由：`pushReportToUserGroups` 查用户所属启用群组 → 按 webhook URL 去重 → 最多 4 并发、单群 10s、总预算 30s → 每个群独立 UPSERT 投递结果；单群失败不阻塞其他群；全成功才更新 `reports.pushed_at`，部分失败写 `last_push_error`（含群名与原因）
+- 自动推送条件不变：全局 `feishu_enabled` + 类型开关 + 用户 `report_push_enabled`；用户无群组时静默跳过
+- 手动推送：`PushReport`/`PushUserReport` 改为发到报告作者所属所有启用群组，不检查类型/用户开关（沿用原手动语义），无群组返回 `REPORT_FEISHU_NO_GROUPS`
+- 管理端：`/admin/reports/groups` CRUD + `PUT .../members` + `POST .../test`；webhook/secret 返回脱敏占位符、留空或回传占位符保留旧值；admin 报告页新增「报告群组」tab（列表/编辑/测试/删除、成员多选搜索）
+- 前端：报告卡片徽标显示「已推送 x/y 群」「部分失败 x/y 群」，悬浮显示失败群原因；设置弹窗移除单 webhook/secret 输入，仅保留总开关 + 三类型开关
+- 测试：新增 service 多群路由单测（去重、部分失败隔离、无群组、opt-in/类型开关、测试卡片、创建校验）；go build/vet + service/repository/handler/routes 全绿；vue-tsc EXIT=0；dev 33336 迁移后核对「计算群」13 人、投递表为空；stable 33333 发布 healthy、HTTP 200、前端 chunk 含新逻辑
+- 发布顺序：dev 启动先在共享库跑迁移 → 验证 → 备份 `sub2api:stable-backup-20261119-1459` → `sub2api:dev` 打 stable → 重建生产；旧 settings webhook 保留，可回滚
+
 ### 后续迭代
 
 - [ ] **节假日表年度维护**：每年 11 月国办公布次年放假安排后，在 `backend/internal/pkg/holiday/holiday.go` init() 补表并走 §4 发布流程（2027 年表未内置前自动按「仅避开周末」回退，日志会 warn 一次）
@@ -336,7 +354,7 @@ docker compose up -d sub2api
 
 ## 10. 飞书推送（2026-09-17 已上线生产）
 
-> 已确认决策：①**群自定义机器人 Webhook**（单群，非自建应用，不支持文件消息）；②**interactive 卡片消息**：报告标题进卡片 header，正文 markdown；③**定时+手动生成成功后自动推**，另有前端"发送到飞书"按钮（本人 user 页 + admin 页任何人）；④日/周/月**三种类型独立推送开关**；⑤用户级"参与推送"开关 `report_push_enabled`（users 表 bool 列，**默认 true**，关闭后不参与自动推送；手动按钮推送不受该开关限制）。推送 best-effort：失败仅日志，不影响报告生成。
+> 已确认决策：①**群自定义机器人 Webhook**（v4.1 起支持多群，群组与成员在「报告群组」页维护；仍非自建应用，不支持文件消息）；②**interactive 卡片消息**：报告标题进卡片 header，正文 markdown；③**定时+手动生成成功后自动推**，另有前端"发送到飞书"按钮（本人 user 页 + admin 页任何人），v4.1 起按报告作者所属所有群投递；④日/周/月**三种类型独立推送开关**（全局，不按群配置）；⑤用户级"参与推送"开关 `report_push_enabled`（users 表 bool 列，**默认 false**，关闭后不参与自动推送；手动按钮推送不受该开关限制）。推送 best-effort：失败仅日志，不影响报告生成。
 
 ### 阶段 1：配置 + 飞书客户端 + 单测 ✅ 已完成
 
@@ -369,5 +387,8 @@ docker compose up -d sub2api
 
 ### 后续优化（发送方式迭代方向，待做）
 
-- [ ] 按类型/按用户分群（多 webhook）、自建应用通道（上传 .md 文件消息、发个人 open_id）
-- [ ] 推送状态记录与失败重试（reports 表加 pushed_at）、卡片模板美化（跳转回报告页按钮）
+- [x] 按用户分群（多 webhook）：v4.1 已实现（群组 + 成员多对多 + 每群投递记录）
+- [ ] 自建应用通道（上传 .md 文件消息、发个人 open_id）
+- [ ] 单群失败重试队列/按钮（当前每个群独立记录失败原因，可手动整份重推）
+- [x] 推送状态记录（`reports.pushed_at`/`last_push_error` + v4.1 `report_feishu_deliveries`）
+- [ ] 卡片模板美化（跳转回报告页按钮）

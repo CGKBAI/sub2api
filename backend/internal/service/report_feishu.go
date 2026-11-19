@@ -102,6 +102,26 @@ func (c *reportFeishuClient) PushReportCard(ctx context.Context, cfg *ReportLLMC
 	}
 
 	title, body := feishuCardContent(report)
+	return c.pushCard(ctx, cfg, title, body)
+}
+
+// PushTestCard 向群组发送一张测试卡片（管理端「测试」按钮用）。
+func (c *reportFeishuClient) PushTestCard(ctx context.Context, cfg *ReportLLMConfig, groupName string) error {
+	if cfg == nil || strings.TrimSpace(cfg.FeishuWebhookURL) == "" {
+		return domain.ErrReportFeishuNotConfigured
+	}
+	name := strings.TrimSpace(groupName)
+	if name == "" {
+		name = "报告群组"
+	}
+	title := "报告群组测试 - " + name
+	body := fmt.Sprintf("这是一条测试消息，收到说明「%s」的 webhook 配置有效。\n\n发送时间：%s",
+		name, time.Now().Format("2006-01-02 15:04:05"))
+	return c.pushCard(ctx, cfg, title, body)
+}
+
+// pushCard 组装并发送 interactive 卡片。
+func (c *reportFeishuClient) pushCard(ctx context.Context, cfg *ReportLLMConfig, title, body string) error {
 	payload := &feishuWebhookRequest{
 		MsgType: "interactive",
 		Card: &feishuCard{

@@ -241,10 +241,10 @@ func (h *ReportHandler) UpdateConfig(c *gin.Context) {
 	if req.FeishuEnabled != nil {
 		cfg.FeishuEnabled = *req.FeishuEnabled
 	}
-	if req.FeishuWebhookURL != nil && *req.FeishuWebhookURL != "" {
+	if req.FeishuWebhookURL != nil && *req.FeishuWebhookURL != "" && *req.FeishuWebhookURL != dto.RedactedSecret {
 		cfg.FeishuWebhookURL = *req.FeishuWebhookURL
 	}
-	if req.FeishuSecret != nil && *req.FeishuSecret != "" {
+	if req.FeishuSecret != nil && *req.FeishuSecret != "" && *req.FeishuSecret != dto.RedactedSecret {
 		cfg.FeishuSecret = *req.FeishuSecret
 	}
 	if req.FeishuPushDaily != nil {
@@ -332,4 +332,198 @@ func errorString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// ===================== 报告群组管理 =====================
+
+type reportFeishuGroupRequest struct {
+	Name       string   `json:"name"`
+	WebhookURL string   `json:"webhook_url"`
+	Secret     string   `json:"secret"`
+	Enabled    *bool    `json:"enabled"`
+	UserIDs    *[]int64 `json:"user_ids"`
+}
+
+type reportFeishuGroupMembersRequest struct {
+	UserIDs []int64 `json:"user_ids"`
+}
+
+// ListGroups 列出全部报告群组。
+// GET /api/v1/admin/reports/groups
+func (h *ReportHandler) ListGroups(c *gin.Context) {
+	groups, err := h.reportService.ListFeishuGroups(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	out := make([]dto.ReportFeishuGroup, 0, len(groups))
+	for i := range groups {
+		out = append(out, *dto.ReportFeishuGroupFromService(&groups[i], true, nil))
+	}
+	response.Success(c, out)
+}
+
+// GetGroup 获取群组详情（含成员 ID）。
+// GET /api/v1/admin/reports/groups/:id
+func (h *ReportHandler) GetGroup(c *gin.Context) {
+	id, ok := parseReportGroupID(c)
+	if !ok {
+		return
+	}
+	group, members, err := h.reportService.GetFeishuGroup(c.Request.Context(), id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.ReportFeishuGroupFromService(group, true, members))
+}
+
+// CreateGroup 新建报告群组。
+// POST /api/v1/admin/reports/groups
+func (h *ReportHandler) CreateGroup(c *gin.Context) {
+	var req reportFeishuGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	group := &service.ReportFeishuGroup{
+		Name:       req.Name,
+		WebhookURL: req.WebhookURL,
+		Secret:     req.Secret,
+		Enabled:    enabled,
+	}
+	var userIDs []int64
+	if req.UserIDs != nil {
+		userIDs = *req.UserIDs
+	}
+	created, err := h.reportService.CreateFeishuGroup(c.Request.Context(), group, userIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.ReportFeishuGroupFromService(created, true, uniqueMemberIDs(userIDs)))
+}
+
+// UpdateGroup 更新报告群组；webhook/secret 留空或回传脱敏占位符时保留旧值。
+// PUT /api/v1/admin/reports/groups/:id
+func (h *ReportHandler) UpdateGroup(c *gin.Context) {
+	id, ok := parseReportGroupID(c)
+	if !ok {
+		return
+	}
+	var req reportFeishuGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	existing, members, err := h.reportService.GetFeishuGroup(c.Request.Context(), id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if strings.TrimSpace(req.Name) != "" {
+		existing.Name = req.Name
+	}
+	if v := strings.TrimSpace(req.WebhookURL); v != "" && v != dto.RedactedSecret {
+		existing.WebhookURL = v
+	}
+	if v := strings.TrimSpace(req.Secret); v != "" && v != dto.RedactedSecret {
+		existing.Secret = v
+	}
+	if req.Enabled != nil {
+		existing.Enabled = *req.Enabled
+	}
+
+	updated, err := h.reportService.UpdateFeishuGroup(c.Request.Context(), existing, members, false)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if req.UserIDs != nil {
+		if err := h.reportService.SetFeishuGroupMembers(c.Request.Context(), id, *req.UserIDs); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		members = uniqueMemberIDs(*req.UserIDs)
+	}
+	response.Success(c, dto.ReportFeishuGroupFromService(updated, true, members))
+}
+
+// DeleteGroup 删除报告群组。
+// DELETE /api/v1/admin/reports/groups/:id
+func (h *ReportHandler) DeleteGroup(c *gin.Context) {
+	id, ok := parseReportGroupID(c)
+	if !ok {
+		return
+	}
+	if err := h.reportService.DeleteFeishuGroup(c.Request.Context(), id); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"deleted": true})
+}
+
+// SetGroupMembers 全量替换群组成员。
+// PUT /api/v1/admin/reports/groups/:id/members
+func (h *ReportHandler) SetGroupMembers(c *gin.Context) {
+	id, ok := parseReportGroupID(c)
+	if !ok {
+		return
+	}
+	var req reportFeishuGroupMembersRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if err := h.reportService.SetFeishuGroupMembers(c.Request.Context(), id, req.UserIDs); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"user_ids": uniqueMemberIDs(req.UserIDs)})
+}
+
+// TestGroup 向群组发送测试卡片。
+// POST /api/v1/admin/reports/groups/:id/test
+func (h *ReportHandler) TestGroup(c *gin.Context) {
+	id, ok := parseReportGroupID(c)
+	if !ok {
+		return
+	}
+	if err := h.reportService.TestFeishuGroup(c.Request.Context(), id); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"sent": true})
+}
+
+func parseReportGroupID(c *gin.Context) (int64, bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid report group ID")
+		return 0, false
+	}
+	return id, true
+}
+
+func uniqueMemberIDs(ids []int64) []int64 {
+	if len(ids) == 0 {
+		return []int64{}
+	}
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }

@@ -2,7 +2,7 @@ export default {
   reports: {
     title: '日报周报月报',
     description: '按用户聚合的请求统计与 AI 工作摘要；数据来自用量记录与提示词审计（需开启异步审计后才有 prompt 内容）。',
-    tabs: { daily: '日报', weekly: '周报', monthly: '月报' },
+    tabs: { daily: '日报', weekly: '周报', monthly: '月报', groups: '报告群组' },
     filters: {
       date: '日期',
       week: '周',
@@ -20,6 +20,7 @@ export default {
       push: '发送到飞书',
       pushing: '发送中…',
       pushSuccess: '已推送到飞书群',
+      saving: '保存中…',
       autoPush: '参与飞书自动推送',
       autoPushHint:
         '仅作用于定时生成的报告（生成时刻与日期规则见页头「节假日感知」开关）；当天发布周报/月报时，日报仍会生成但不再自动推送，避免群消息刷屏。手动生成的报告不自动推送，可点卡片按钮手动发送',
@@ -40,7 +41,12 @@ export default {
     },
     summary: { title: 'AI 工作摘要', empty: '暂无 AI 总结（未配置 LLM 或该周期无 prompt 数据）' },
     status: { pending: '生成中', done: '完成', failed: '失败' },
-    push: { pushed: '已推送', pushFailed: '推送失败' },
+    push: {
+      pushed: '已推送',
+      pushFailed: '推送失败',
+      pushSuccessCount: '已推送 {ok}/{total} 群',
+      pushPartial: '部分失败 {ok}/{total} 群'
+    },
     goal: {
       title: '近期目标',
       placeholder: '填写近期要完成的项目目标，如：完成 XX 功能开发并上线；日报将生成「近期目标计划」小节围绕这些目标制定',
@@ -50,6 +56,41 @@ export default {
       saved: '目标已保存'
     },
     empty: '该条件下暂无报告',
+    groups: {
+      title: '报告群组',
+      description:
+        '每个群对应一个飞书群机器人；一位用户可属于多个群组，定时报告会投递到其所属的所有启用群组。',
+      create: '新建群组',
+      createTitle: '新建报告群组',
+      editTitle: '编辑报告群组',
+      name: '群名',
+      namePlaceholder: '如：计算群',
+      members: '成员',
+      webhook: 'Webhook 地址',
+      secret: '加签密钥（可选）',
+      status: '状态',
+      actions: '操作',
+      enabled: '启用',
+      disabled: '停用',
+      configured: '已配置',
+      notConfigured: '未配置',
+      edit: '编辑',
+      test: '测试',
+      testing: '发送中…',
+      testSent: '测试卡片已发送',
+      delete: '删除',
+      deleteConfirm: '确定删除群组「{name}」？成员关系与投递记录会一并删除。',
+      deleted: '群组已删除',
+      saved: '群组已保存',
+      empty: '还没有报告群组',
+      dialogHint: '一位用户可加入多个群组；报告会按成员关系投递。成员需同时开启「参与飞书自动推送」才会收到定时报告。',
+      webhookPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
+      webhookKeep: '留空表示不修改',
+      secretPlaceholder: '没有加签可留空',
+      secretKeep: '留空表示不修改',
+      searchUser: '搜索用户',
+      noUsers: '未找到用户'
+    },
     config: {
       title: 'AI 总结设置',
       description: '配置 OpenAI 兼容接口用于生成工作摘要；不配置则只产出统计报告。',
@@ -73,6 +114,7 @@ export default {
       feishuWebhookPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/…，留空表示不修改',
       feishuSecret: '加签密钥（可选）',
       feishuSecretPlaceholder: '留空表示不修改',
+      feishuGroupHint: '每个群的 webhook/加签在「报告群组」页维护；这里只保留总开关与自动推送类型。',
       feishuPushTypes: '自动推送类型（仅定时生成）',
       feishuPushDaily: '日报',
       feishuPushWeekly: '周报',

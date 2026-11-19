@@ -3,7 +3,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import reportsAPI, { type Report, type ReportLLMConfig, type ReportType } from '@/api/admin/reports'
+import reportsAPI, {
+  type Report,
+  type ReportLLMConfig,
+  type ReportType,
+  type ReportFeishuGroup
+} from '@/api/admin/reports'
+import { list as listAdminUsers } from '@/api/admin/users'
+import type { AdminUser } from '@/types'
 import { useAppStore } from '@/stores/app'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { BaseDialog, EmptyState, LoadingSpinner } from '@/components/common'
@@ -13,7 +20,11 @@ marked.setOptions({ breaks: true, gfm: true })
 const { t } = useI18n()
 const appStore = useAppStore()
 
-const activeTab = ref<ReportType>('daily')
+const activeTab = ref<ReportType | 'groups'>('daily')
+// 群组管理 tab 不是报告类型；生成/筛选统一回退到日报类型（此时按钮已隐藏）
+const activeReportType = computed<ReportType>(() =>
+  activeTab.value === 'groups' ? 'daily' : activeTab.value
+)
 const dailyDate = ref(todayStr())
 const userIdFilter = ref('')
 const loading = ref(false)
@@ -45,6 +56,7 @@ const weekOptions = (() => {
 const weeklyDate = ref(weekOptions[0]?.value ?? todayStr())
 const monthlyDate = ref(todayStr().slice(0, 7))
 const activeDate = computed(() => {
+  if (activeTab.value === 'groups') return ''
   if (activeTab.value === 'weekly') return weeklyDate.value
   if (activeTab.value === 'monthly') return monthlyDate.value ? `${monthlyDate.value}-01` : ''
   return dailyDate.value
@@ -85,13 +97,181 @@ async function toggleHolidayAware() {
 async function pushToFeishu(report: Report) {
   pushingReportId.value = report.id
   try {
-    await reportsAPI.pushToFeishu(report.id)
-    appStore.showSuccess(t('admin.reports.actions.pushSuccess'))
+    const updated = await reportsAPI.pushToFeishu(report.id)
+    const deliveries = updated.push_deliveries ?? []
+    const ok = deliveries.filter((d) => d.status === 'success').length
+    if (deliveries.length > 0) {
+      appStore.showSuccess(t('admin.reports.push.pushSuccessCount', { ok, total: deliveries.length }))
+    } else {
+      appStore.showSuccess(t('admin.reports.actions.pushSuccess'))
+    }
+    await load()
   } catch (error: any) {
     appStore.showError(error?.message || String(error))
   } finally {
     pushingReportId.value = null
   }
+}
+
+// ===================== 报告群组管理 =====================
+const groups = ref<ReportFeishuGroup[]>([])
+const groupsLoading = ref(false)
+const groupDialogOpen = ref(false)
+const editingGroupId = ref<number | null>(null)
+const savingGroup = ref(false)
+const testingGroupId = ref<number | null>(null)
+const groupForm = ref({
+  name: '',
+  webhook_url: '',
+  secret: '',
+  enabled: true,
+  user_ids: [] as number[]
+})
+const allUsers = ref<AdminUser[]>([])
+const usersLoading = ref(false)
+const userSearch = ref('')
+const filteredUsers = computed(() => {
+  const q = userSearch.value.trim().toLowerCase()
+  if (!q) return allUsers.value
+  return allUsers.value.filter(
+    (u) => (u.email ?? '').toLowerCase().includes(q) || (u.username ?? '').toLowerCase().includes(q)
+  )
+})
+
+async function loadGroups() {
+  groupsLoading.value = true
+  try {
+    groups.value = await reportsAPI.listGroups()
+  } catch (error: any) {
+    appStore.showError(error?.message || String(error))
+  } finally {
+    groupsLoading.value = false
+  }
+}
+
+async function loadUsers() {
+  if (allUsers.value.length > 0 || usersLoading.value) return
+  usersLoading.value = true
+  try {
+    const res = await listAdminUsers(1, 200, {})
+    allUsers.value = res.items ?? []
+  } catch (error: any) {
+    appStore.showError(error?.message || String(error))
+  } finally {
+    usersLoading.value = false
+  }
+}
+
+function openCreateGroup() {
+  editingGroupId.value = null
+  groupForm.value = { name: '', webhook_url: '', secret: '', enabled: true, user_ids: [] }
+  userSearch.value = ''
+  groupDialogOpen.value = true
+  loadUsers()
+}
+
+async function openEditGroup(group: ReportFeishuGroup) {
+  editingGroupId.value = group.id
+  userSearch.value = ''
+  try {
+    const detail = await reportsAPI.getGroup(group.id)
+    groupForm.value = {
+      name: detail.name,
+      // 回显脱敏值，留空/占位符均表示保留旧值
+      webhook_url: '',
+      secret: '',
+      enabled: detail.enabled,
+      user_ids: detail.user_ids ?? []
+    }
+    groupDialogOpen.value = true
+    loadUsers()
+  } catch (error: any) {
+    appStore.showError(error?.message || String(error))
+  }
+}
+
+function toggleGroupMember(userId: number) {
+  const idx = groupForm.value.user_ids.indexOf(userId)
+  if (idx >= 0) {
+    groupForm.value.user_ids.splice(idx, 1)
+  } else {
+    groupForm.value.user_ids.push(userId)
+  }
+}
+
+function isGroupMember(userId: number): boolean {
+  return groupForm.value.user_ids.includes(userId)
+}
+
+async function saveGroup() {
+  if (!groupForm.value.name.trim()) return
+  savingGroup.value = true
+  try {
+    if (editingGroupId.value) {
+      await reportsAPI.updateGroup(editingGroupId.value, {
+        name: groupForm.value.name.trim(),
+        webhook_url: groupForm.value.webhook_url.trim() || undefined,
+        secret: groupForm.value.secret.trim() || undefined,
+        enabled: groupForm.value.enabled,
+        user_ids: groupForm.value.user_ids
+      })
+    } else {
+      await reportsAPI.createGroup({
+        name: groupForm.value.name.trim(),
+        webhook_url: groupForm.value.webhook_url.trim(),
+        secret: groupForm.value.secret.trim(),
+        enabled: groupForm.value.enabled,
+        user_ids: groupForm.value.user_ids
+      })
+    }
+    appStore.showSuccess(t('admin.reports.groups.saved'))
+    groupDialogOpen.value = false
+    await loadGroups()
+  } catch (error: any) {
+    appStore.showError(error?.message || String(error))
+  } finally {
+    savingGroup.value = false
+  }
+}
+
+async function removeGroup(group: ReportFeishuGroup) {
+  if (!window.confirm(t('admin.reports.groups.deleteConfirm', { name: group.name }))) return
+  try {
+    await reportsAPI.deleteGroup(group.id)
+    appStore.showSuccess(t('admin.reports.groups.deleted'))
+    await loadGroups()
+  } catch (error: any) {
+    appStore.showError(error?.message || String(error))
+  }
+}
+
+async function testGroup(group: ReportFeishuGroup) {
+  testingGroupId.value = group.id
+  try {
+    await reportsAPI.testGroup(group.id)
+    appStore.showSuccess(t('admin.reports.groups.testSent'))
+  } catch (error: any) {
+    appStore.showError(error?.message || String(error))
+  } finally {
+    testingGroupId.value = null
+  }
+}
+
+function pushDeliverySummary(report: Report) {
+  const deliveries = report.push_deliveries ?? []
+  if (deliveries.length === 0) return null
+  const ok = deliveries.filter((d) => d.status === 'success').length
+  const failed = deliveries.filter((d) => d.status === 'failed')
+  return {
+    total: deliveries.length,
+    ok,
+    failed: failed.length,
+    detail: failed.map((d) => `${d.group_name || `#${d.group_id}`}: ${d.error || 'failed'}`).join('\n')
+  }
+}
+
+function groupWebhookLabel(group: ReportFeishuGroup): string {
+  return group.webhook_url ? t('admin.reports.groups.configured') : t('admin.reports.groups.notConfigured')
 }
 
 function todayStr(): string {
@@ -101,6 +281,7 @@ function todayStr(): string {
 }
 
 async function load() {
+  if (activeTab.value === 'groups') return
   loading.value = true
   try {
     const filters: Record<string, string | number> = { type: activeTab.value }
@@ -120,6 +301,10 @@ async function load() {
 
 watch([activeTab, dailyDate, weeklyDate, monthlyDate, userIdFilter], () => {
   page.value = 1
+  if (activeTab.value === 'groups') {
+    loadGroups()
+    return
+  }
   load()
 })
 
@@ -132,7 +317,7 @@ async function generateAll() {
   generatingAll.value = true
   try {
     const res = await reportsAPI.generateAll({
-      type: activeTab.value,
+      type: activeReportType.value,
       date: activeDate.value || undefined
     })
     appStore.showSuccess(`${res.generated}`)
@@ -148,7 +333,7 @@ async function generateFor(report: Report) {
   generatingUserId.value = report.user_id
   try {
     await reportsAPI.generate({
-      type: activeTab.value,
+      type: activeReportType.value,
       user_id: report.user_id,
       date: activeDate.value || undefined
     })
@@ -203,7 +388,7 @@ const configForm = ref<ReportLLMConfig & { api_key: string }>({
 async function openSettings() {
   try {
     const cfg = await reportsAPI.getConfig()
-    configForm.value = { ...cfg, api_key: '' }
+    configForm.value = { ...cfg, api_key: '', feishu_webhook_url: '', feishu_secret: '' }
     settingsOpen.value = true
   } catch (error: any) {
     appStore.showError(error?.message || String(error))
@@ -276,6 +461,7 @@ const statusBadge = computed(() => (status: string) => {
             {{ t('admin.reports.actions.settings') }}
           </button>
           <button
+            v-if="activeTab !== 'groups'"
             class="btn btn-primary text-sm"
             :disabled="generatingAll"
             @click="generateAll"
@@ -289,7 +475,7 @@ const statusBadge = computed(() => (status: string) => {
       <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div class="flex rounded-lg border border-gray-200 dark:border-gray-700 p-0.5">
           <button
-            v-for="tp in ['daily', 'weekly', 'monthly'] as const"
+            v-for="tp in ['daily', 'weekly', 'monthly', 'groups'] as const"
             :key="tp"
             class="rounded-md px-4 py-1.5 text-sm font-medium transition-colors"
             :class="
@@ -302,7 +488,7 @@ const statusBadge = computed(() => (status: string) => {
             {{ t(`admin.reports.tabs.${tp}`) }}
           </button>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
+        <div v-if="activeTab !== 'groups'" class="flex flex-wrap items-center gap-2">
           <label class="text-sm text-gray-500 dark:text-gray-400">
             {{
               activeTab === 'weekly'
@@ -326,7 +512,76 @@ const statusBadge = computed(() => (status: string) => {
         </div>
       </div>
 
+      <!-- 报告群组管理 -->
+      <div v-if="activeTab === 'groups'" class="space-y-4">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.reports.groups.title') }}
+            </h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('admin.reports.groups.description') }}
+            </p>
+          </div>
+          <button class="btn btn-primary text-sm" @click="openCreateGroup">
+            {{ t('admin.reports.groups.create') }}
+          </button>
+        </div>
+
+        <LoadingSpinner v-if="groupsLoading" />
+        <EmptyState v-else-if="groups.length === 0" :description="t('admin.reports.groups.empty')" />
+        <div v-else class="card overflow-x-auto p-0">
+          <table class="min-w-full text-sm">
+            <thead class="bg-gray-50 text-left text-xs uppercase text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+              <tr>
+                <th class="px-4 py-3">{{ t('admin.reports.groups.name') }}</th>
+                <th class="px-4 py-3">{{ t('admin.reports.groups.members') }}</th>
+                <th class="px-4 py-3">{{ t('admin.reports.groups.webhook') }}</th>
+                <th class="px-4 py-3">{{ t('admin.reports.groups.status') }}</th>
+                <th class="px-4 py-3 text-right">{{ t('admin.reports.groups.actions') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="g in groups"
+                :key="g.id"
+                class="border-t border-gray-100 dark:border-gray-700"
+              >
+                <td class="px-4 py-3 font-medium text-gray-900 dark:text-white">{{ g.name }}</td>
+                <td class="px-4 py-3 text-gray-700 dark:text-gray-200">{{ g.member_count }}</td>
+                <td class="px-4 py-3 text-gray-500 dark:text-gray-400">{{ groupWebhookLabel(g) }}</td>
+                <td class="px-4 py-3">
+                  <span class="badge" :class="g.enabled ? 'badge-success' : 'badge-warning'">
+                    {{ g.enabled ? t('admin.reports.groups.enabled') : t('admin.reports.groups.disabled') }}
+                  </span>
+                </td>
+                <td class="whitespace-nowrap px-4 py-3 text-right">
+                  <button class="btn btn-secondary px-3 py-1 text-xs" @click="openEditGroup(g)">
+                    {{ t('admin.reports.groups.edit') }}
+                  </button>
+                  <button
+                    class="btn btn-secondary ml-2 px-3 py-1 text-xs"
+                    :disabled="testingGroupId === g.id"
+                    @click="testGroup(g)"
+                  >
+                    {{
+                      testingGroupId === g.id
+                        ? t('admin.reports.groups.testing')
+                        : t('admin.reports.groups.test')
+                    }}
+                  </button>
+                  <button class="btn btn-danger ml-2 px-3 py-1 text-xs" @click="removeGroup(g)">
+                    {{ t('admin.reports.groups.delete') }}
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- 列表 -->
+      <template v-else>
       <LoadingSpinner v-if="loading" />
       <EmptyState v-else-if="reports.length === 0" :description="t('admin.reports.empty')" />
       <div v-else class="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -345,7 +600,25 @@ const statusBadge = computed(() => (status: string) => {
                   {{ t(`admin.reports.status.${report.status}`) }}
                 </span>
                 <span
-                  v-if="report.pushed_at"
+                  v-if="pushDeliverySummary(report)"
+                  class="badge"
+                  :class="pushDeliverySummary(report)?.failed === 0 ? 'badge-success' : 'badge-danger'"
+                  :title="pushDeliverySummary(report)?.detail || ''"
+                >
+                  {{
+                    pushDeliverySummary(report)?.failed === 0
+                      ? t('admin.reports.push.pushSuccessCount', {
+                          ok: pushDeliverySummary(report)?.ok,
+                          total: pushDeliverySummary(report)?.total
+                        })
+                      : t('admin.reports.push.pushPartial', {
+                          ok: pushDeliverySummary(report)?.ok,
+                          total: pushDeliverySummary(report)?.total
+                        })
+                  }}
+                </span>
+                <span
+                  v-else-if="report.pushed_at"
                   class="badge badge-success"
                   :title="new Date(report.pushed_at).toLocaleString()"
                 >
@@ -449,6 +722,8 @@ const statusBadge = computed(() => (status: string) => {
         </div>
       </div>
 
+      </template>
+
       <!-- 设置弹窗 -->
       <BaseDialog :show="settingsOpen" :title="t('admin.reports.config.title')" @close="settingsOpen = false">
         <div class="space-y-4">
@@ -510,16 +785,9 @@ const statusBadge = computed(() => (status: string) => {
               <input v-model="configForm.feishu_enabled" type="checkbox" class="checkbox" />
               {{ t('admin.reports.config.feishuEnabled') }}
             </label>
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div class="sm:col-span-2">
-                <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.config.feishuWebhook') }}</label>
-                <input v-model="configForm.feishu_webhook_url" type="password" :class="inputClass" :placeholder="t('admin.reports.config.feishuWebhookPlaceholder')" autocomplete="new-password" />
-              </div>
-              <div class="sm:col-span-2">
-                <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.config.feishuSecret') }}</label>
-                <input v-model="configForm.feishu_secret" type="password" :class="inputClass" :placeholder="t('admin.reports.config.feishuSecretPlaceholder')" autocomplete="new-password" />
-              </div>
-            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.reports.config.feishuGroupHint') }}
+            </p>
             <div class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.reports.config.feishuPushTypes') }}
             </div>
@@ -544,6 +812,110 @@ const statusBadge = computed(() => (status: string) => {
             </button>
             <button class="btn btn-primary text-sm" :disabled="savingConfig" @click="saveConfig">
               {{ t('admin.reports.config.save') }}
+            </button>
+          </div>
+        </div>
+      </BaseDialog>
+
+      <!-- 报告群组编辑弹窗 -->
+      <BaseDialog
+        :show="groupDialogOpen"
+        :title="
+          editingGroupId
+            ? t('admin.reports.groups.editTitle')
+            : t('admin.reports.groups.createTitle')
+        "
+        @close="groupDialogOpen = false"
+      >
+        <div class="space-y-4">
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            {{ t('admin.reports.groups.dialogHint') }}
+          </p>
+          <div>
+            <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.groups.name') }}</label>
+            <input v-model="groupForm.name" type="text" :class="inputClass" :placeholder="t('admin.reports.groups.namePlaceholder')" />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.groups.webhook') }}</label>
+            <input
+              v-model="groupForm.webhook_url"
+              type="password"
+              :class="inputClass"
+              :placeholder="
+                editingGroupId
+                  ? t('admin.reports.groups.webhookKeep')
+                  : t('admin.reports.groups.webhookPlaceholder')
+              "
+              autocomplete="new-password"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-gray-500">{{ t('admin.reports.groups.secret') }}</label>
+            <input
+              v-model="groupForm.secret"
+              type="password"
+              :class="inputClass"
+              :placeholder="
+                editingGroupId
+                  ? t('admin.reports.groups.secretKeep')
+                  : t('admin.reports.groups.secretPlaceholder')
+              "
+              autocomplete="new-password"
+            />
+          </div>
+          <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+            <input v-model="groupForm.enabled" type="checkbox" class="checkbox" />
+            {{ t('admin.reports.groups.enabled') }}
+          </label>
+
+          <div>
+            <div class="mb-1 flex items-center justify-between">
+              <label class="text-xs text-gray-500">
+                {{ t('admin.reports.groups.members') }}
+                <span class="ml-1 text-gray-400">({{ groupForm.user_ids.length }})</span>
+              </label>
+              <input
+                v-model="userSearch"
+                type="text"
+                :placeholder="t('admin.reports.groups.searchUser')"
+                class="input w-48 text-sm"
+              />
+            </div>
+            <LoadingSpinner v-if="usersLoading" />
+            <div
+              v-else
+              class="max-h-64 space-y-0.5 overflow-y-auto rounded-lg border border-gray-200 p-2 dark:border-gray-700"
+            >
+              <div v-if="filteredUsers.length === 0" class="p-2 text-xs text-gray-400">
+                {{ t('admin.reports.groups.noUsers') }}
+              </div>
+              <label
+                v-for="u in filteredUsers"
+                :key="u.id"
+                class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
+              >
+                <input
+                  type="checkbox"
+                  class="checkbox"
+                  :checked="isGroupMember(u.id)"
+                  @change="toggleGroupMember(u.id)"
+                />
+                <span class="text-gray-900 dark:text-white">{{ u.username || u.email }}</span>
+                <span class="truncate text-xs text-gray-400">{{ u.email }}</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="flex justify-end gap-2 pt-2">
+            <button class="btn btn-secondary text-sm" @click="groupDialogOpen = false">
+              {{ t('admin.reports.config.cancel') }}
+            </button>
+            <button
+              class="btn btn-primary text-sm"
+              :disabled="savingGroup || !groupForm.name.trim()"
+              @click="saveGroup"
+            >
+              {{ savingGroup ? t('admin.reports.actions.saving') : t('admin.reports.config.save') }}
             </button>
           </div>
         </div>

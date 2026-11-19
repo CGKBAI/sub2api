@@ -3,7 +3,7 @@ export default {
     title: 'Reports',
     description:
       'Per-user request statistics with AI work summaries; content comes from usage logs and prompt audit (prompts are included only after async audit is enabled).',
-    tabs: { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' },
+    tabs: { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', groups: 'Report Groups' },
     filters: {
       date: 'Date',
       week: 'Week',
@@ -21,6 +21,7 @@ export default {
       push: 'Send to Feishu',
       pushing: 'Sending…',
       pushSuccess: 'Pushed to Feishu group',
+      saving: 'Saving…',
       autoPush: 'Join Feishu auto push',
       autoPushHint:
         'Applies only to scheduled reports (times & date rules follow the "Holiday awareness" toggle in the header). On days a weekly or monthly report is published, the daily report is still generated but not auto-pushed to avoid flooding the group. Manually generated reports are never auto-pushed — use the card button to send',
@@ -41,7 +42,12 @@ export default {
     },
     summary: { title: 'AI Summary', empty: 'No AI summary (LLM not configured or no prompts in this period)' },
     status: { pending: 'Pending', done: 'Done', failed: 'Failed' },
-    push: { pushed: 'Pushed', pushFailed: 'Push failed' },
+    push: {
+      pushed: 'Pushed',
+      pushFailed: 'Push failed',
+      pushSuccessCount: 'Pushed to {ok}/{total} groups',
+      pushPartial: 'Partial failure {ok}/{total} groups'
+    },
     goal: {
       title: 'Recent Goals',
       placeholder:
@@ -52,6 +58,41 @@ export default {
       saved: 'Goals saved'
     },
     empty: 'No reports under current filters',
+    groups: {
+      title: 'Report Groups',
+      description:
+        'Each group maps to a Feishu bot webhook. A user can belong to multiple groups and scheduled reports are delivered to every enabled group they belong to.',
+      create: 'New group',
+      createTitle: 'New report group',
+      editTitle: 'Edit report group',
+      name: 'Group name',
+      namePlaceholder: 'e.g. Compute',
+      members: 'Members',
+      webhook: 'Webhook URL',
+      secret: 'Signing secret (optional)',
+      status: 'Status',
+      actions: 'Actions',
+      enabled: 'Enabled',
+      disabled: 'Disabled',
+      configured: 'Configured',
+      notConfigured: 'Not configured',
+      edit: 'Edit',
+      test: 'Test',
+      testing: 'Sending…',
+      testSent: 'Test card sent',
+      delete: 'Delete',
+      deleteConfirm: 'Delete group "{name}"? Memberships and delivery records will be removed too.',
+      deleted: 'Group deleted',
+      saved: 'Group saved',
+      empty: 'No report groups yet',
+      dialogHint: 'A user can join multiple groups; reports are delivered by membership. Users must also enable "Join Feishu auto push" to receive scheduled reports.',
+      webhookPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
+      webhookKeep: 'Leave empty to keep unchanged',
+      secretPlaceholder: 'Leave empty if signing is disabled',
+      secretKeep: 'Leave empty to keep unchanged',
+      searchUser: 'Search users',
+      noUsers: 'No users found'
+    },
     config: {
       title: 'AI Summary Settings',
       description: 'Configure an OpenAI-compatible endpoint to generate work summaries; without it only statistics are produced.',
@@ -77,6 +118,7 @@ export default {
       feishuWebhookPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/…, leave empty to keep unchanged',
       feishuSecret: 'Signing secret (optional)',
       feishuSecretPlaceholder: 'Leave empty to keep unchanged',
+      feishuGroupHint: 'Each group webhook/signing secret is managed in the "Report Groups" tab; only the master switch and auto push types live here.',
       feishuPushTypes: 'Auto push types (scheduled reports only)',
       feishuPushDaily: 'Daily',
       feishuPushWeekly: 'Weekly',

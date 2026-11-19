@@ -39,15 +39,17 @@ const (
 // ReportService 日报/周报核心服务。
 type ReportService struct {
 	reportRepo  ReportRepository
+	groupRepo   ReportGroupRepository
 	settingRepo SettingRepository
 	llm         *reportLLMClient
 	feishu      *reportFeishuClient
 }
 
 // NewReportService 构造报告服务。
-func NewReportService(reportRepo ReportRepository, settingRepo SettingRepository) *ReportService {
+func NewReportService(reportRepo ReportRepository, groupRepo ReportGroupRepository, settingRepo SettingRepository) *ReportService {
 	return &ReportService{
 		reportRepo:  reportRepo,
+		groupRepo:   groupRepo,
 		settingRepo: settingRepo,
 		llm: &reportLLMClient{
 			httpClient: &http.Client{Timeout: reportLLMTimeout + 10*time.Second},
@@ -60,7 +62,7 @@ func NewReportService(reportRepo ReportRepository, settingRepo SettingRepository
 
 // ReportPeriod 根据报告类型与基准时间计算周期边界 [start, end)。
 // 周报为正常自然周 [本周一 00:00, 下周一 00:00)：定时生成日由 skip_holidays 决定
-//（开=本周最后一个工作日，普通周即周五；关=固定周五）；周末/假期后有工作 →
+// （开=本周最后一个工作日，普通周即周五；关=固定周五）；周末/假期后有工作 →
 // 之后手动重生成自动补入（手动生成不自动推飞书，需用卡片按钮推），
 // ref 在周内任意时刻 → 该周一~周日报告，手动/定时语义一致。
 // 月报覆盖 ref 所在自然月（选 8 月任意日期 → 生成 8 月月报）：开=当月第一个
@@ -176,12 +178,13 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 
 // maybeAutoPushFeishu 定时生成成功后的飞书自动推送（手动生成不经过此路径）
 // （best-effort：失败仅记日志，不影响生成结果）。
-// 生效条件：feishu_enabled + 对应类型推送开关 + webhook 已配置 + 用户参与推送（users.report_push_enabled）。
+// 生效条件：feishu_enabled + 对应类型推送开关 + 用户参与推送（users.report_push_enabled），
+// 然后投递到该用户所属的所有启用群组。
 func (s *ReportService) maybeAutoPushFeishu(ctx context.Context, cfg *ReportLLMConfig, report *Report) {
 	if s == nil || s.feishu == nil || report == nil || report.Status != domain.ReportStatusDone {
 		return
 	}
-	if cfg == nil || !cfg.FeishuEnabled || strings.TrimSpace(cfg.FeishuWebhookURL) == "" {
+	if cfg == nil || !cfg.FeishuEnabled {
 		return
 	}
 	switch report.Type {
@@ -208,13 +211,7 @@ func (s *ReportService) maybeAutoPushFeishu(ctx context.Context, cfg *ReportLLMC
 	if !optIn {
 		return
 	}
-	pushCtx, cancel := context.WithTimeout(ctx, reportFeishuPushTimeout)
-	defer cancel()
-	pushErr := s.feishu.PushReportCard(pushCtx, cfg, report)
-	if pushErr != nil {
-		logger.LegacyPrintf("service.report", "[ReportFeishu] auto push %s report %d to feishu: %v", report.Type, report.ID, pushErr)
-	}
-	s.markPushResult(report, pushErr)
+	s.pushReportToUserGroups(ctx, cfg, report)
 }
 
 // markPushResult 持久化推送结果（成功写 pushed_at，失败记 last_push_error）。
@@ -241,16 +238,21 @@ func (s *ReportService) markPushResult(report *Report, pushErr error) {
 	report.LastPushError = ""
 }
 
-// pushReportWithConfig 手动推送单篇报告（独立 10s 超时），并记录推送结果。
+// pushReportWithConfig 手动推送单篇报告到作者所属的所有群组（独立 10s/群超时），
+// 并记录每个群的投递结果。与自动推送不同：不检查类型开关与用户参与开关，
+// 只要求全局飞书推送已启用且用户至少属于一个启用群组。
 func (s *ReportService) pushReportWithConfig(ctx context.Context, report *Report) error {
 	cfg, err := s.GetReportConfig(ctx)
 	if err != nil {
 		return err
 	}
-	pushCtx, cancel := context.WithTimeout(ctx, reportFeishuPushTimeout)
-	defer cancel()
-	pushErr := s.feishu.PushReportCard(pushCtx, cfg, report)
-	s.markPushResult(report, pushErr)
+	if cfg == nil || !cfg.FeishuEnabled {
+		return domain.ErrReportFeishuNotConfigured
+	}
+	success, failed, pushErr := s.pushReportToUserGroups(ctx, cfg, report)
+	if success == 0 && failed == 0 {
+		return domain.ErrReportFeishuNoGroups
+	}
 	return pushErr
 }
 
@@ -337,7 +339,16 @@ func (s *ReportService) GetReport(ctx context.Context, id int64) (*Report, error
 	if s == nil || s.reportRepo == nil {
 		return nil, errors.New("report repository not initialized")
 	}
-	return s.reportRepo.GetByID(ctx, id)
+	item, err := s.reportRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if item != nil {
+		items := []Report{*item}
+		s.attachDeliveries(ctx, items)
+		item.PushDeliveries = items[0].PushDeliveries
+	}
+	return item, nil
 }
 
 // ListReports 管理端列表（可按人过滤）。
@@ -348,7 +359,12 @@ func (s *ReportService) ListReports(ctx context.Context, params pagination.Pagin
 	if filters.Type != "" && filters.Type != domain.ReportTypeDaily && filters.Type != domain.ReportTypeWeekly && filters.Type != domain.ReportTypeMonthly {
 		return nil, nil, domain.ErrReportInvalidType
 	}
-	return s.reportRepo.List(ctx, params, filters)
+	items, pageInfo, err := s.reportRepo.List(ctx, params, filters)
+	if err != nil {
+		return nil, nil, err
+	}
+	s.attachDeliveries(ctx, items)
+	return items, pageInfo, nil
 }
 
 // ListUserReports 普通用户列表：强制只看自己。

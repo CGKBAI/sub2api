@@ -73,6 +73,29 @@ type ReportRepository interface {
 	MarkPushResult(ctx context.Context, id int64, pushedAt time.Time, pushErr string) error
 }
 
+// ReportGroupRepository 是报告飞书群组/成员/投递结果的持久化接口。
+type ReportGroupRepository interface {
+	ListGroups(ctx context.Context) ([]ReportFeishuGroup, error)
+	GetGroup(ctx context.Context, id int64) (*ReportFeishuGroup, error)
+	CreateGroup(ctx context.Context, g *ReportFeishuGroup) error
+	UpdateGroup(ctx context.Context, g *ReportFeishuGroup) error
+	DeleteGroup(ctx context.Context, id int64) error
+	// ListGroupMemberIDs 返回群组成员用户 ID（UI 编辑成员用）。
+	ListGroupMemberIDs(ctx context.Context, groupID int64) ([]int64, error)
+	// ReplaceGroupMembers 全量替换群组成员。
+	ReplaceGroupMembers(ctx context.Context, groupID int64, userIDs []int64) error
+	// ListEnabledGroupsForUser 返回用户所属且启用的群组（推送路由用）。
+	ListEnabledGroupsForUser(ctx context.Context, userID int64) ([]ReportFeishuGroup, error)
+	// UpsertDelivery 写入/更新报告×群组的最近一次投递结果。
+	UpsertDelivery(ctx context.Context, d *ReportPushDelivery) error
+	// ListDeliveriesByReportIDs 批量查询多份报告的投递结果（列表页避免 N+1）。
+	ListDeliveriesByReportIDs(ctx context.Context, reportIDs []int64) (map[int64][]ReportPushDelivery, error)
+}
+
+type ReportFeishuGroup = domain.ReportFeishuGroup
+
+type ReportPushDelivery = domain.ReportPushDelivery
+
 // UserPromptSnippet 是用于 LLM 总结的单条 prompt 片段。
 type UserPromptSnippet struct {
 	Model     string
