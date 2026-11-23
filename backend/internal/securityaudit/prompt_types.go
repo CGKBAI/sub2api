@@ -109,10 +109,13 @@ type PromptSnapshot struct {
 	PromptHash         string `json:"prompt_hash"`
 	RedactedPreview    string `json:"redacted_preview"`
 	FullPrompt         string `json:"full_prompt"`
-	PromptLength       int    `json:"prompt_length"`
-	MessageCount       int    `json:"message_count"`
-	Stage              string `json:"stage"`
-	SessionID          string `json:"session_id"`
+	// UserText 是剥掉注入块后的最新一条用户消息（≤4000 字），供报告侧直接读取，
+	// 避免从 full_prompt 头部用正则猜（未闭合的 system-reminder 会导致提问丢失）。
+	UserText     string `json:"user_text"`
+	PromptLength int    `json:"prompt_length"`
+	MessageCount int    `json:"message_count"`
+	Stage        string `json:"stage"`
+	SessionID    string `json:"session_id"`
 
 	ScanText string `json:"-"`
 }

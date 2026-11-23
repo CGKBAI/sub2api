@@ -67,6 +67,7 @@ func extractPromptSnapshot(req Request, latestTurnOnly bool) (PromptSnapshot, er
 		Endpoint: req.Endpoint, Protocol: req.Protocol, Model: req.Model,
 		PromptHash: hex.EncodeToString(digest[:]), RedactedPreview: BuildPromptPreview(metadataText, DefaultPromptPreviewMaxRunes),
 		FullPrompt:   buildFullPromptFromScanText(scanText, DefaultFullPromptMaxRunes),
+		UserText:     LatestUserTextFromScanText(scanText),
 		PromptLength: utf8.RuneCountInString(metadataText), MessageCount: len(segments), Stage: stage,
 		ScanText: scanText,
 	}, nil
@@ -930,6 +931,32 @@ func trimPromptBlock(block string, index, headBlock int) string {
 }
 
 func runeLen(value string) int { return len([]rune(value)) }
+
+// latestUserTextRunes 是 prompt_audit_events.user_text 的存储上限。
+const latestUserTextRunes = 4000
+
+// systemReminderBlockRe 匹配客户端注入的完整提醒块（可跨行）。
+var systemReminderBlockRe = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
+
+// LatestUserTextFromScanText 从扫描文本里取出「最新一条用户消息」并剥掉客户端
+// 注入的 <system-reminder> 块，供报告侧直接当作用户提问使用。
+//
+// 为什么要单独存一列：报告侧此前只能读 full_prompt 的头部 2000 字再用正则猜，
+// 注入块未闭合时直接判为空——实测 8.1% 的请求因此丢失提问。这里在写入时用
+// 完整文本（未截断）抽取，命中率更高。
+//
+// 未闭合的 <system-reminder> 只去掉标签本身、保留其后内容，尽量把用户输入救回来。
+func LatestUserTextFromScanText(scanText string) string {
+	latest := scanText
+	if index := strings.Index(scanText, promptAuditPrioritySeparator); index >= 0 {
+		latest = scanText[:index]
+	}
+	cleaned := systemReminderBlockRe.ReplaceAllString(latest, "")
+	cleaned = strings.ReplaceAll(cleaned, "<system-reminder>", "")
+	cleaned = strings.ReplaceAll(cleaned, "</system-reminder>", "")
+	cleaned = strings.ReplaceAll(cleaned, "\x00", "")
+	return TrimRunes(strings.TrimSpace(cleaned), latestUserTextRunes)
+}
 
 func TrimRunes(value string, limit int) string {
 	if limit <= 0 {

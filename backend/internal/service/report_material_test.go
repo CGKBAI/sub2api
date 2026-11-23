@@ -110,6 +110,25 @@ func newMaterialTurns(n int) []UserPromptSnippet {
 	return turns
 }
 
+func TestCollectUserTurnsPrefersCleanText(t *testing.T) {
+	turns := []UserPromptSnippet{
+		// 写入时抽干的用户输入以 "#" 开头：旧的启发式会把 # 开头的判为噪音，必须保留
+		{Model: "m", CreatedAt: time.Now(), Content: "# 整理日报模板并把结论落到文档", CleanText: true},
+		// 未抽干的历史行仍走正则提取（此处的注入块会被剥掉）
+		{Model: "m", CreatedAt: time.Now(), Content: "<system-reminder>x</system-reminder>修复报表导出"},
+	}
+	items := collectUserTurns(turns, 100)
+	if len(items) != 2 {
+		t.Fatalf("items = %d (%v), want 2", len(items), items)
+	}
+	if !strings.Contains(items[0], "整理日报模板") {
+		t.Fatalf("clean text should be kept verbatim: %v", items[0])
+	}
+	if !strings.Contains(items[1], "修复报表导出") {
+		t.Fatalf("legacy row should still be extracted: %v", items[1])
+	}
+}
+
 func TestBuildSummaryPromptRespectsTotalBudget(t *testing.T) {
 	repo := &materialFakeRepo{turns: newMaterialTurns(400)}
 	svc := NewReportService(repo, nil, nil)

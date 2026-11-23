@@ -160,6 +160,35 @@ func TestFullPromptFromScanTextDropsSkillManifest(t *testing.T) {
 	}
 }
 
+func TestLatestUserTextFromScanText(t *testing.T) {
+	latest := "<system-reminder>技能清单/环境注入</system-reminder>\n请帮我修复日报生成失败的问题"
+	history := "这是历史对话，不应该出现在 user_text 里"
+	scanText, _ := buildPrioritizedScanText([]string{latest, history})
+
+	got := LatestUserTextFromScanText(scanText)
+	if got != "请帮我修复日报生成失败的问题" {
+		t.Fatalf("user_text = %q", got)
+	}
+	if strings.Contains(got, history) {
+		t.Fatal("only the latest user turn should be kept")
+	}
+
+	// 未闭合的注入块：只去标签、保留其后内容，尽量救回用户输入。
+	broken := "<system-reminder>没闭合的提醒\n继续推进缓存优化"
+	scanText, _ = buildPrioritizedScanText([]string{broken, history})
+	got = LatestUserTextFromScanText(scanText)
+	if !strings.Contains(got, "继续推进缓存优化") {
+		t.Fatalf("unclosed reminder should keep the rest, got %q", got)
+	}
+
+	// 超长输入截断到 4000 字。
+	long := strings.Repeat("长", latestUserTextRunes+100)
+	scanText, _ = buildPrioritizedScanText([]string{long, history})
+	if n := utf8.RuneCountInString(LatestUserTextFromScanText(scanText)); n > latestUserTextRunes+1 {
+		t.Fatalf("user_text runes = %d, want <= %d", n, latestUserTextRunes)
+	}
+}
+
 func TestFullPromptFromScanTextRestoresMultiSegmentLayout(t *testing.T) {
 	scanText, metadataText := buildPrioritizedScanText([]string{"latest user", "system policy", "earlier user"})
 	require.Contains(t, scanText, promptAuditPrioritySeparator)

@@ -52,8 +52,9 @@ type ReportRepository interface {
 
 	// AggregateUserUsage 聚合单个用户在时间窗内的用量统计（usage_logs）。
 	AggregateUserUsage(ctx context.Context, userID int64, start, end time.Time) (ReportStats, error)
-	// FetchUserTurns 拉取用户在时间窗内的逐次请求快照（prompt_audit_events，
-	// 每条 Content 为完整拍平 prompt 的头部截断，由上层提取用户真实输入），按时间正序。
+	// FetchUserTurns 拉取用户在时间窗内的逐次请求快照（最新 limit 条），按时间正序。
+	// Content 优先为写入时抽好的 user_text（CleanText=true，已剥掉注入块）；
+	// 历史行回退为完整拍平 prompt 的头部截断（CleanText=false，需正则提取）。
 	FetchUserTurns(ctx context.Context, userID int64, start, end time.Time, limit int) ([]UserPromptSnippet, error)
 	// FetchPromptSnapshots 拉取时间窗内用于对话区窗口采样的会话快照，按时间正序。
 	// session 感知：session_id 非空的行每 session 取两条（最新请求 + 会话中点前最近
@@ -102,6 +103,9 @@ type UserPromptSnippet struct {
 	Model     string
 	CreatedAt time.Time
 	Content   string
+	// CleanText 为 true 表示 Content 已是写入时抽好的用户输入（user_text 列），
+	// 直接使用即可；否则 Content 是 full_prompt 的头部截断，需要正则提取。
+	CleanText bool
 }
 
 // ReportGenerateResult 手动/定时生成的结果。

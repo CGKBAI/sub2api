@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -215,8 +216,8 @@ func (r *reportRepository) AggregateUserUsage(ctx context.Context, userID int64,
 }
 
 // FetchUserTurns 拉取用户在时间窗内的逐次请求快照（最新 limit 条），按时间正序返回。
-// 每条只取拍平 prompt 的前 2000 字符：审计落库顺序为「该次请求最后一条用户消息 +
-// 其余上下文」，头部即用户输入所在；截头部可让上层提取真实提问，避免全量 64k 传输。
+// 优先取写入时抽好的 user_text（已剥掉 <system-reminder> 注入块），历史行没有该列
+// 时回退到 full_prompt 头部 2000 字，由上层用正则提取真实提问。
 func (r *reportRepository) FetchUserTurns(ctx context.Context, userID int64, start, end time.Time, limit int) ([]service.UserPromptSnippet, error) {
 	if limit <= 0 {
 		limit = 300
@@ -225,6 +226,7 @@ func (r *reportRepository) FetchUserTurns(ctx context.Context, userID int64, sta
 
 	rows, err := client.QueryContext(ctx, `
 		SELECT COALESCE(model, ''), created_at,
+		       COALESCE(user_text, '') AS user_text,
 		       left(COALESCE(NULLIF(full_prompt, ''), NULLIF(redacted_preview, ''), ''), 2000) AS content
 		FROM prompt_audit_events
 		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
@@ -240,8 +242,13 @@ func (r *reportRepository) FetchUserTurns(ctx context.Context, userID int64, sta
 	out := make([]service.UserPromptSnippet, 0, limit)
 	for rows.Next() {
 		var snip service.UserPromptSnippet
-		if err := rows.Scan(&snip.Model, &snip.CreatedAt, &snip.Content); err != nil {
+		var userText string
+		if err := rows.Scan(&snip.Model, &snip.CreatedAt, &userText, &snip.Content); err != nil {
 			return out, err
+		}
+		if userText = strings.TrimSpace(userText); userText != "" {
+			snip.Content = userText
+			snip.CleanText = true
 		}
 		out = append(out, snip)
 	}

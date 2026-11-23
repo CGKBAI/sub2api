@@ -17,7 +17,7 @@
 9. ✅ **飞书推送**（2026-09-17 已上线生产）：群自定义机器人 Webhook + interactive 卡片；生成成功自动推（类型开关+用户开关）+ 手动按钮（本人/admin）；commit 7c3f80740，见 §10
 10. ✅ **DeepSeek Search/Fetch**（2026-11-03 已上线生产）：`POST /v1/tools/search`、`POST /v1/tools/fetch`，仅原生 DeepSeek 分组（Composite 等一律 404）；复用调度器只选 DeepSeek API Key 账号；请求/成功响应原样转发；200 且有 results/content 才按次计费（默认 0.005，可覆盖/免费/倍率），Search query 走提示词审计，见 §8 v4.0
 11. ✅ **飞书多群推送**（2026-11-19 已上线生产）：新增 `report_feishu_groups` / `report_feishu_group_members` / `report_feishu_deliveries` 三表；定时与手动推送都按报告作者所属的**所有启用群组**投递（同一 webhook 去重），单群失败不影响其他群；原全局 webhook 自动迁移为「计算群」，仅当时 `report_push_enabled=true` 的 13 个用户入组；管理员在报告页「报告群组」tab 维护群与成员，见 §8 v4.1
-12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 代码完成，待 dev 验证/发布）：①审计截断**按段分配预算**（最新用户消息 16k + 尾部块 + 1.5k 系统提示词，静态技能清单丢弃），不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③**每 session 取「最新 + 中段」两条快照**，补回被截断丢掉的中段；④生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；⑤推送幂等：已推送过的周期不再自动重复推。见 §8 v4.2
+12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 代码完成，待 dev 验证/发布）：①审计截断**按段分配预算**（最新用户消息 16k + 尾部块 + 1.5k 系统提示词，静态技能清单丢弃），不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③**每 session 取「最新 + 中段」两条快照**，补回被截断丢掉的中段；④生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；⑤推送幂等：已推送过的周期不再自动重复推；⑥新增 `user_text` 列，救回此前静默丢失的 8.1% 用户提问。见 §8 v4.2
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -133,6 +133,7 @@ docker compose up -d sub2api
 - **格式**：`full_prompt` = 拍平纯文本（非 JSON）= [最后一条用户消息原文] + \n\n + [其余上下文（system/历史）]，段间无角色标记；超 65536 runes 时**按段分配预算**（v4.2.1 起）：最新用户消息段精确保留 **16k**（超出截断并标注）、其余按空行切块**从尾部往前**取（每块 ≤2048、最多 24 块）、开头补 1536 字符系统提示词、`</available_skills>` 技能清单整块丢弃，被跳过处插「省略 N 段」标记。拍平文本无角色标记，读取侧无法重建轮次，所以保哪些段只能在写入侧决定
 - `redacted_preview` = 前 28 字符脱敏预览；`prompt_hash` = SHA256
 - 元数据：user_id/user_email_snapshot/api_key_name_snapshot/model/provider/endpoint/created_at 等，`(user_id, created_at DESC)` 索引现成
+- **`user_text`（v4.2 起）**：写入时抽好的「最新一条用户消息」，已剥掉 `<system-reminder>` 注入块，≤4000 rune；报告侧「用户提问记录」优先读它，历史行回退 full_prompt 头部 2000 字
 - 扫描失败的事件：decision=pass + `scanner_version="scan_failed:<code>"`（降级标记，可 SQL 过滤；v3.5 起仅在重试耗尽/不可重试后降级，且前面 chunk 已成功的真实发现会聚合保留）
 - 查询示例：`SELECT created_at, model, full_prompt FROM prompt_audit_events WHERE user_id=9 AND created_at >= '2026-09-15' ORDER BY created_at;`
 
@@ -164,8 +165,8 @@ docker compose up -d sub2api
 - 修改挂载点：`domain/report.go`（群组/投递类型 + 迁移错误）、`service/report.go`（ReportGroupRepository）、`service/report_service.go`（构造器注入 groupRepo、多群推送、列表补齐投递）、`service/report_feishu.go`（PushTestCard/pushCard 抽取）、`handler/admin/report_handler.go`（群组 CRUD/成员/测试接口、config 保存忽略脱敏占位符）、`handler/dto/report.go`、`server/routes/admin.go`、`repository/wire.go`、`service/wire.go`
 
 **报告素材与质量闭环（v4.2，2026-11-23，未发布）**：
-- 新增：`migrations/250_report_quality_warnings.sql`（reports.quality_warnings，纯增量）、`service/report_quality.go`（+`_test.go`）、`service/report_material_test.go`
-- 修改：`securityaudit/prompt_snapshot.go`（`BuildFullPrompt` 改头尾截断 + 新 `TrimRunesHeadTail`）、`service/report_service.go`（`buildSummary` 拆为 `buildSummaryPrompt` + `completeCheckedReport`、窗口采样重写、总量预算、推送幂等）、`domain/report.go`（QualityWarnings + ErrReportSensitiveContent）、`ent/schema/report.go`（quality_warnings，含 ent 生成物）、`repository/report_repo.go`、`handler/dto/report.go`、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（⚠️ 质量提示徽标）、i18n zh/en `push.qualityWarn`
+- 新增：`migrations/250_report_quality_warnings.sql`（reports.quality_warnings，纯增量）、`migrations/251_prompt_audit_user_text.sql`（prompt_audit_events.user_text，纯增量）、`service/report_quality.go`（+`_test.go`）、`service/report_material_test.go`
+- 修改：`securityaudit/prompt_snapshot.go`（`buildFullPromptFromScanText` 按段分配预算 + `LatestUserTextFromScanText`）、`securityaudit/prompt_worker.go`（从 scanText 重算 FullPrompt/UserText）、`securityaudit/prompt_repository.go`（INSERT 增列）、`securityaudit/prompt_types.go`（PromptSnapshot.UserText）、`service/report_service.go`（`buildSummary` 拆为 `buildSummaryPrompt` + `completeCheckedReport`、窗口采样重写、总量预算、推送幂等）、`service/report.go`（UserPromptSnippet.CleanText）、`domain/report.go`（QualityWarnings + ErrReportSensitiveContent）、`ent/schema/report.go`（quality_warnings，含 ent 生成物）、`repository/report_repo.go`（user_text 读取 + 双快照）、`handler/dto/report.go`、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（⚠️ 质量提示徽标）、i18n zh/en `push.qualityWarn`
 
 **修改官方文件（挂载点）**：`config.go`（ReportConfig）、`handler.go|handler/wire.go`、`service/wire.go`、`repository/wire.go`、`routes/admin.go|user.go`、`cmd/server/wire.go`（cleanup）、`domain_constants.go`（SettingKeyReportConfig）、router/index.ts、AppSidebar.vue（ReportIcon）、i18n common.ts nav + admin/index.ts ×2、go.mod/go.sum（wire cmd indirect）
 
@@ -345,6 +346,7 @@ docker compose up -d sub2api
 - [x] **2. 对话窗口采样重写**（`service/report_service.go`）：`conversationWindowRunes` 700→1000、`conversationWindowBudget` 32→48（单日素材上限约 4.8 万字符）；`sampleWindows` 改为 ①**尾部优先**（后 30% 对话区分到一半窗口）②**段首对齐**（起点吸附到最近段落/代码块边界，最多 240 rune）③**跳过 ``` 围栏内窗口** ④锚点 `</available_skills>` 缺失且文本超长时先丢前 8192 rune；尾段容纳不下时预算回填前段，保证总窗口数稳定；完全相同的窗口去重
 - [x] **2b. 素材预算改为按段分配**（替代盲切头尾，2026-11-23 追加）：`buildFullPromptFromScanText` 用优先级分隔符**精确定位**「最新用户消息」段并单独给 **16k**（用户粘贴的超长日志只留前 16k）；其余内容按空行切块后**从后往前**取（每块 ≤2048、最多 24 块）；开头补 1536 字符系统提示词用于识别客户端/场景；命中 `</available_skills>` 的静态技能清单**整块丢弃**（实测 44% 的超长请求里它在吃头部预算）；被跳过处插「省略 N 段」标记。handler 与 worker 两条写入路径统一调用同一函数（worker 原本会用 scanText 覆盖 handler 的结果，只在 handler 改是无效的）。坑：NUL 剥离必须在切分优先级分隔符**之后**——分隔符本身含 `\x00`
 - [x] **2c. 每 session 取 latest + 中段两条快照**（`repository/report_repo.go`）：`FetchPromptSnapshots` 由「每 session 只取最后一条」改为取两条——latest（最近一条）+ mid（会话时间中点之前最近一条）。因为每条请求都是"会话至今"的**累积快照**，mid 的尾部恰好覆盖 latest 因 64k 截断丢掉的中段，等于用零写入成本把当天覆盖面翻倍
+- [x] **2d. `prompt_audit_events.user_text`（P2，迁移 251）**：写入时直接把「剥掉 `<system-reminder>` 注入块后的最新用户消息」（≤4000 字）单独存一列，报告侧优先读它、历史行 `COALESCE` 回退到 full_prompt 头部 2000 字。**解决实测 8.1% 的提问静默丢失**（旧逻辑在头部 2000 字内遇到未闭合注入块就判为空）。未闭合块只去标签、保留其后内容以尽量救回输入；`CleanText=true` 的片段跳过正则二次提取（避免 "#"/"{" 开头被噪音启发式误杀）。写入点在 worker 里从 scanText 重算（job 行不存 user_text，不需要改 job 表）
 - [x] **3. 上下文总量预算**（`buildSummaryPrompt`）：新增 `reportUserPromptMaxRunes = 80000`，固定段（周期/目标/子报告/统计）优先，剩余额度在"提问记录"与"对话片段"间**交替从最早一条开始丢**；`max_prompts` 死配置接线（此前一直用硬编码 300），按"去重后最多注入多少条有效提问"生效、超出保留最近
 - [x] **4. 生成后质量校验**（新增 `service/report_quality.go`）：`checkReportQuality` 分三级——**硬违规**（小节结构缺失/多余第三节/禁语"次数·工具·模式"/敏感信息）、**软问题**（核心工作条目数、条目 >60 字、代码块/表格、空泛措辞，**仅记日志不打徽标**，避免多数正常报告都带 ⚠️）、**敏感**；硬违规把清单回灌**重写一次**，仍不通过则选更轻的一份**照发**并写 `quality_warnings`；敏感信息在两次输出中都出现时整篇判失败（`ErrReportSensitiveContent`，不落库不推送）。另加 `sanitizeReportBody` 自动剥掉 LLM 多输出的 H1 标题
 - [x] **5. 推送幂等**（`maybeAutoPushFeishu`）：`pushed_at` 非空即跳过自动推送并记日志。`persist` 的 Update 不触碰 `pushed_at`，所以重生成同周期报告时该字段仍是真实推送状态——Redis 标记丢失、leader 切换、节假日模式切换导致的"同周期再生成一次"不再重复刷群；补发/更新走卡片手动按钮（与 v3.1 语义一致）

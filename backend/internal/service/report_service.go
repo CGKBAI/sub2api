@@ -702,7 +702,14 @@ func collectUserTurns(turns []UserPromptSnippet, truncateChars int) []string {
 	seen := make(map[string]struct{}, len(turns))
 	items := make([]string, 0, 16)
 	for _, t := range turns {
-		intent := extractUserTurn(t.Content, truncateChars)
+		var intent string
+		if t.CleanText {
+			// 写入时已经抽干（user_text 列）：直接截断即可，不要再走正则提取，
+			// 否则会被「以 # / { / 开头就判为噪音」之类的启发式误杀。
+			intent = truncateRunes(t.Content, truncateChars)
+		} else {
+			intent = extractUserTurn(t.Content, truncateChars)
+		}
 		if intent == "" {
 			continue
 		}
