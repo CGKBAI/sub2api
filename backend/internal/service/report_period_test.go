@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -100,11 +101,19 @@ func TestReportPeriodDailyUnchanged(t *testing.T) {
 
 // 窗口预算按 session 数均分：总预算 48、单 session 上限 8、最少 2 窗（sampleWindows 防除零下限）。
 func TestCollectConversationWindowsBudget(t *testing.T) {
-	conv := strings.Repeat("用户要求整理日报模板，助手读取文件并修改代码。", 100) // 2200 runes > 1000
+	// 每个会话内容不同且非周期重复，避免窗口去重干扰预算计数（去重只消除完全
+	// 相同的窗口；周期性文本会让不同偏移的窗口内容一致）。
+	conv := func(i int) string {
+		var b strings.Builder
+		for j := 0; j < 400; j++ {
+			fmt.Fprintf(&b, "会话%d第%d步整理日报模板。", i, j)
+		}
+		return b.String()
+	}
 	mk := func(n int) []UserPromptSnippet {
 		snaps := make([]UserPromptSnippet, 0, n)
 		for i := 0; i < n; i++ {
-			snaps = append(snaps, UserPromptSnippet{CreatedAt: time.Unix(int64(i), 0), Content: conv})
+			snaps = append(snaps, UserPromptSnippet{CreatedAt: time.Unix(int64(i), 0), Content: conv(i)})
 		}
 		return snaps
 	}

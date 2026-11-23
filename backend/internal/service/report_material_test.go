@@ -14,6 +14,17 @@ import (
 // 日报素材：窗口采样 + 上下文预算
 // =========================
 
+func TestCollectConversationWindowsDedupesOverlappingSnapshots(t *testing.T) {
+	// 同一 session 的 latest / mid 快照可能内容高度重合，完全相同的窗口应去重，
+	// 避免同一段对话在素材里重复出现、白占预算。
+	conv := strings.Repeat("用户要求整理日报模板，助手读取文件并修改代码。", 200)
+	distinct := len(collectConversationWindows([]UserPromptSnippet{{Content: conv}}))
+	collapsed := len(collectConversationWindows([]UserPromptSnippet{{Content: conv}, {Content: conv}}))
+	if collapsed != distinct {
+		t.Fatalf("identical snapshots: %d windows, want %d after dedupe", collapsed, distinct)
+	}
+}
+
 func TestSampleWindowsAlignsToParagraphStart(t *testing.T) {
 	para := strings.Repeat("段", 300)
 	var b strings.Builder

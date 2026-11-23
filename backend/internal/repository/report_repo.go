@@ -257,9 +257,12 @@ func (r *reportRepository) FetchUserTurns(ctx context.Context, userID int64, sta
 
 // FetchPromptSnapshots 拉取时间窗内用于对话区窗口采样的会话快照，按时间正序。
 // 选取策略（session 感知）：
-//  1. session_id 非空的行按 session 分组，各取该 session 最后一次请求的完整 prompt
-//     （同 session 每次请求都是"会话至今"的快照，最后一条上下文最全）；session 数
-//     超过 count 时取最近 count 个——多 session 用户不会漏掉整个会话；
+//  1. session_id 非空的行按 session 分组，每个 session 取**两条**：
+//     - latest：该 session 最后一次请求（"会话至今"的完整快照，尾部=最近的工作）；
+//     - mid：会话时间中点之前最近的一条（其尾部恰好覆盖 latest 被 64k 截断丢掉的中段）。
+//     同 session 的每条请求都是累积前缀快照，单取 latest 只能看到"现在"，中段永远
+//     看不到；补一条 mid 等于用零成本把当天覆盖面翻倍。session 数超过 count 时取
+//     最近 count 个——多 session 用户不会漏掉整个会话；
 //  2. session_id 为空的行（迁移 234 前的历史数据/无会话头客户端）保留全天均匀分布兜底。
 func (r *reportRepository) FetchPromptSnapshots(ctx context.Context, userID int64, start, end time.Time, count int) ([]service.UserPromptSnippet, error) {
 	if count <= 0 {
@@ -267,27 +270,37 @@ func (r *reportRepository) FetchPromptSnapshots(ctx context.Context, userID int6
 	}
 	client := clientFromContext(ctx, r.client)
 
-	// ① 有 session_id：每 session 取最新一条，最多 count 个最近 session。
+	// ① 有 session_id：每 session 取 latest + mid 两条，最多 count 个最近 session。
 	//    命中部分索引 idx_prompt_audit_events_session (user_id, session_id, created_at DESC)。
 	sessionRows, err := client.QueryContext(ctx, `
-		WITH session_last AS (
-		    SELECT session_id, MAX(created_at) AS last_at
+		WITH bounds AS (
+		    SELECT session_id, MIN(created_at) AS first_at, MAX(created_at) AS last_at
 		    FROM prompt_audit_events
 		    WHERE user_id = $1 AND created_at >= $2 AND created_at < $3 AND session_id <> ''
 		    GROUP BY session_id
-		    ORDER BY last_at DESC
+		    ORDER BY MAX(created_at) DESC
 		    LIMIT $4
 		),
-		picked AS (
-		    SELECT DISTINCT ON (e.session_id)
-		        e.session_id, COALESCE(e.model, '') AS model, e.created_at,
-		        COALESCE(NULLIF(e.full_prompt, ''), '') AS content
+		latest AS (
+		    SELECT DISTINCT ON (e.session_id) e.id
 		    FROM prompt_audit_events e
-		    JOIN session_last s ON e.session_id = s.session_id
+		    JOIN bounds b ON b.session_id = e.session_id
 		    WHERE e.user_id = $1 AND e.created_at >= $2 AND e.created_at < $3
 		    ORDER BY e.session_id, e.created_at DESC, e.id DESC
+		),
+		mid AS (
+		    SELECT DISTINCT ON (e.session_id) e.id
+		    FROM prompt_audit_events e
+		    JOIN bounds b ON b.session_id = e.session_id
+		    WHERE e.user_id = $1 AND e.created_at >= $2 AND e.created_at < $3
+		      AND e.created_at < b.first_at + (b.last_at - b.first_at) / 2
+		    ORDER BY e.session_id, e.created_at DESC, e.id DESC
 		)
-		SELECT model, created_at, content FROM picked ORDER BY created_at
+		SELECT COALESCE(e.model, '') AS model, e.created_at,
+		       COALESCE(NULLIF(e.full_prompt, ''), '') AS content
+		FROM prompt_audit_events e
+		WHERE e.id IN (SELECT id FROM latest UNION SELECT id FROM mid)
+		ORDER BY e.created_at
 	`, userID, start, end, count)
 	if err != nil {
 		// 审计表不存在（未开启审计）等情况：返回空，报告退化为纯统计
@@ -295,7 +308,7 @@ func (r *reportRepository) FetchPromptSnapshots(ctx context.Context, userID int6
 	}
 	defer sessionRows.Close()
 
-	out := make([]service.UserPromptSnippet, 0, count*2)
+	out := make([]service.UserPromptSnippet, 0, count*4)
 	for sessionRows.Next() {
 		var snip service.UserPromptSnippet
 		if err := sessionRows.Scan(&snip.Model, &snip.CreatedAt, &snip.Content); err != nil {

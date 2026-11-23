@@ -574,7 +574,7 @@ func (s *ReportService) buildSummaryPrompt(
 		}
 	}
 	if len(windows) > 0 {
-		b.WriteString(fmt.Sprintf("\n### 对话记录片段（截取自 %d 个会话的最完整快照，尾部优先采样，按时间排列，含用户输入/助手回复/工具输出）\n", reportSnapshotCount))
+		b.WriteString(fmt.Sprintf("\n### 对话记录片段（截取自最近 %d 个会话的「最新 + 中段」快照，尾部优先采样，按时间排列，含用户输入/助手回复/工具输出）\n", reportSnapshotCount))
 		for _, w := range windows {
 			b.WriteString("- " + w + "\n")
 		}
@@ -793,8 +793,9 @@ func turnDedupKey(s string) string {
 }
 
 // collectConversationWindows 从每个会话快照的「对话区」抽取窗口。
-// 总窗口预算按 session 数均分（单 session 上限 conversationWindowsPerSnapCap）：
-// session 多时每 session 窗口变少、少时变多，总传输量稳定在预算附近。
+// 总窗口预算按快照数均分（单 session 上限 conversationWindowsPerSnapCap）：
+// 快照多时每份窗口变少、少时变多，总传输量稳定在预算附近。
+// 同一 session 的 latest 与 mid 两条快照可能包含重叠内容，完全相同的结果会去重。
 // 对话区定位：优先取 available_skills 清单结束标记之后的内容（opencode 等
 // 智能体客户端把系统提示词/工具/技能清单放在前部，真实对话在其后）；
 // 无该标记时从头开始（普通聊天客户端历史即对话）。
@@ -810,8 +811,15 @@ func collectConversationWindows(snaps []UserPromptSnippet) []string {
 		per = conversationWindowsPerSnapCap
 	}
 	out := make([]string, 0, len(snaps)*per)
+	seen := make(map[string]struct{}, len(snaps)*per)
 	for _, s := range snaps {
-		out = append(out, sampleWindows(s.Content, per, conversationWindowRunes)...)
+		for _, w := range sampleWindows(s.Content, per, conversationWindowRunes) {
+			if _, dup := seen[w]; dup {
+				continue
+			}
+			seen[w] = struct{}{}
+			out = append(out, w)
+		}
 	}
 	return out
 }
@@ -843,6 +851,13 @@ func sampleWindows(text string, n, size int) []string {
 		runes = runes[conversationHeadNoiseRunes:]
 	}
 	if len(runes) <= size {
+		if w := strings.TrimSpace(string(runes)); w != "" {
+			return []string{w}
+		}
+		return nil
+	}
+	// 装不下两个互不重叠的窗口时，整段作为单窗返回（小快照不需要采样）。
+	if len(runes) < 2*size {
 		if w := strings.TrimSpace(string(runes)); w != "" {
 			return []string{w}
 		}

@@ -17,7 +17,7 @@
 9. ✅ **飞书推送**（2026-09-17 已上线生产）：群自定义机器人 Webhook + interactive 卡片；生成成功自动推（类型开关+用户开关）+ 手动按钮（本人/admin）；commit 7c3f80740，见 §10
 10. ✅ **DeepSeek Search/Fetch**（2026-11-03 已上线生产）：`POST /v1/tools/search`、`POST /v1/tools/fetch`，仅原生 DeepSeek 分组（Composite 等一律 404）；复用调度器只选 DeepSeek API Key 账号；请求/成功响应原样转发；200 且有 results/content 才按次计费（默认 0.005，可覆盖/免费/倍率），Search query 走提示词审计，见 §8 v4.0
 11. ✅ **飞书多群推送**（2026-11-19 已上线生产）：新增 `report_feishu_groups` / `report_feishu_group_members` / `report_feishu_deliveries` 三表；定时与手动推送都按报告作者所属的**所有启用群组**投递（同一 webhook 去重），单群失败不影响其他群；原全局 webhook 自动迁移为「计算群」，仅当时 `report_push_enabled=true` 的 13 个用户入组；管理员在报告页「报告群组」tab 维护群与成员，见 §8 v4.1
-12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 代码完成，待 dev 验证/发布）：①审计截断改「头 8k + 尾 56k」，不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；④推送幂等：已推送过的周期不再自动重复推。见 §8 v4.2
+12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 代码完成，待 dev 验证/发布）：①审计截断**按段分配预算**（最新用户消息 16k + 尾部块 + 1.5k 系统提示词，静态技能清单丢弃），不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③**每 session 取「最新 + 中段」两条快照**，补回被截断丢掉的中段；④生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；⑤推送幂等：已推送过的周期不再自动重复推。见 §8 v4.2
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -130,7 +130,7 @@ docker compose up -d sub2api
 ## 5. Prompt 存储事实（已核实）
 
 - 表：`prompt_audit_events`（主）+ `prompt_audit_jobs`（队列），无自动清理，永久保留
-- **格式**：`full_prompt` = 拍平纯文本（非 JSON）= [最后一条用户消息原文] + \n\n + [其余上下文（system/历史）]，段间无角色标记；超 65536 runes 时按 **头 8192 + 尾（约 57k）+ 中间省略标记** 截断（v4.2 起；拍平文本无角色标记，读取侧无法重建轮次，只能在写入侧决定保哪两段——头部=本轮任务、尾部=最近上下文、中段历史信息密度最低）
+- **格式**：`full_prompt` = 拍平纯文本（非 JSON）= [最后一条用户消息原文] + \n\n + [其余上下文（system/历史）]，段间无角色标记；超 65536 runes 时**按段分配预算**（v4.2.1 起）：最新用户消息段精确保留 **16k**（超出截断并标注）、其余按空行切块**从尾部往前**取（每块 ≤2048、最多 24 块）、开头补 1536 字符系统提示词、`</available_skills>` 技能清单整块丢弃，被跳过处插「省略 N 段」标记。拍平文本无角色标记，读取侧无法重建轮次，所以保哪些段只能在写入侧决定
 - `redacted_preview` = 前 28 字符脱敏预览；`prompt_hash` = SHA256
 - 元数据：user_id/user_email_snapshot/api_key_name_snapshot/model/provider/endpoint/created_at 等，`(user_id, created_at DESC)` 索引现成
 - 扫描失败的事件：decision=pass + `scanner_version="scan_failed:<code>"`（降级标记，可 SQL 过滤；v3.5 起仅在重试耗尽/不可重试后降级，且前面 chunk 已成功的真实发现会聚合保留）
@@ -342,13 +342,17 @@ docker compose up -d sub2api
 > 决策（用户确认）：①截断配额取 **头 8k + 尾 56k**；②质量不合格时**照发 + ⚠️ 标记**（不扣住，漏报比质量差更伤信任），敏感信息例外。
 
 - [x] **1. 审计截断改头尾保留**（`securityaudit/prompt_snapshot.go`）：新增 `TrimRunesHeadTail`，`BuildFullPrompt` 超 65536 runes 时保 **头 8192（本轮用户消息）+ 尾 ≈57k（最近上下文）**，中间插 `……（此处省略 N 字）……` 标记，总长仍 ≤ limit（存储上界不变）。为什么只能在写入侧修：`full_prompt` 是段间无角色标记的拍平文本，读取侧无法重建轮次。**只影响新数据**，历史行不动
-- [x] **2. 对话窗口采样重写**（`service/report_service.go`）：`conversationWindowRunes` 700→1000、`conversationWindowBudget` 32→48（单日素材上限约 4.8 万字符）；`sampleWindows` 改为 ①**尾部优先**（后 30% 对话区分到一半窗口）②**段首对齐**（起点吸附到最近段落/代码块边界，最多 240 rune）③**跳过 ``` 围栏内窗口** ④锚点 `</available_skills>` 缺失且文本超长时先丢前 8192 rune；尾段容纳不下时预算回填前段，保证总窗口数稳定
+- [x] **2. 对话窗口采样重写**（`service/report_service.go`）：`conversationWindowRunes` 700→1000、`conversationWindowBudget` 32→48（单日素材上限约 4.8 万字符）；`sampleWindows` 改为 ①**尾部优先**（后 30% 对话区分到一半窗口）②**段首对齐**（起点吸附到最近段落/代码块边界，最多 240 rune）③**跳过 ``` 围栏内窗口** ④锚点 `</available_skills>` 缺失且文本超长时先丢前 8192 rune；尾段容纳不下时预算回填前段，保证总窗口数稳定；完全相同的窗口去重
+- [x] **2b. 素材预算改为按段分配**（替代盲切头尾，2026-11-23 追加）：`buildFullPromptFromScanText` 用优先级分隔符**精确定位**「最新用户消息」段并单独给 **16k**（用户粘贴的超长日志只留前 16k）；其余内容按空行切块后**从后往前**取（每块 ≤2048、最多 24 块）；开头补 1536 字符系统提示词用于识别客户端/场景；命中 `</available_skills>` 的静态技能清单**整块丢弃**（实测 44% 的超长请求里它在吃头部预算）；被跳过处插「省略 N 段」标记。handler 与 worker 两条写入路径统一调用同一函数（worker 原本会用 scanText 覆盖 handler 的结果，只在 handler 改是无效的）。坑：NUL 剥离必须在切分优先级分隔符**之后**——分隔符本身含 `\x00`
+- [x] **2c. 每 session 取 latest + 中段两条快照**（`repository/report_repo.go`）：`FetchPromptSnapshots` 由「每 session 只取最后一条」改为取两条——latest（最近一条）+ mid（会话时间中点之前最近一条）。因为每条请求都是"会话至今"的**累积快照**，mid 的尾部恰好覆盖 latest 因 64k 截断丢掉的中段，等于用零写入成本把当天覆盖面翻倍
 - [x] **3. 上下文总量预算**（`buildSummaryPrompt`）：新增 `reportUserPromptMaxRunes = 80000`，固定段（周期/目标/子报告/统计）优先，剩余额度在"提问记录"与"对话片段"间**交替从最早一条开始丢**；`max_prompts` 死配置接线（此前一直用硬编码 300），按"去重后最多注入多少条有效提问"生效、超出保留最近
 - [x] **4. 生成后质量校验**（新增 `service/report_quality.go`）：`checkReportQuality` 分三级——**硬违规**（小节结构缺失/多余第三节/禁语"次数·工具·模式"/敏感信息）、**软问题**（核心工作条目数、条目 >60 字、代码块/表格、空泛措辞，**仅记日志不打徽标**，避免多数正常报告都带 ⚠️）、**敏感**；硬违规把清单回灌**重写一次**，仍不通过则选更轻的一份**照发**并写 `quality_warnings`；敏感信息在两次输出中都出现时整篇判失败（`ErrReportSensitiveContent`，不落库不推送）。另加 `sanitizeReportBody` 自动剥掉 LLM 多输出的 H1 标题
 - [x] **5. 推送幂等**（`maybeAutoPushFeishu`）：`pushed_at` 非空即跳过自动推送并记日志。`persist` 的 Update 不触碰 `pushed_at`，所以重生成同周期报告时该字段仍是真实推送状态——Redis 标记丢失、leader 切换、节假日模式切换导致的"同周期再生成一次"不再重复刷群；补发/更新走卡片手动按钮（与 v3.1 语义一致）
 - [x] **6. 落库与前端**：迁移 250 加 `reports.quality_warnings`（纯增量）；domain/ent/DTO/仓储全链路；admin/user 报告卡片在推送徽标后新增 `badge-warning`「⚠️ 质量提示」徽标，悬浮显示具体问题；i18n zh/en `push.qualityWarn`
 - [x] 测试：新增 `report_quality_test.go`（结构调整/禁语/敏感/第三节目/软问题/标题剥离）、`report_material_test.go`（尾部优先/段首对齐/代码块/总量预算/max_prompts）、`TestMaybeAutoPushFeishuSkipsAlreadyPushedReport`、`TrimRunesHeadTail` 用例；`TestCollectConversationWindowsBudget` 按新预算更新
 - [x] 验证：`go build ./...` + `go vet`(service/repository/securityaudit/handler) 全绿；`go test` service/securityaudit/handler 全绿；`vue-tsc --noEmit` EXIT=0
+- [x] **线上实测**（dev 33336，用真实流量核对新格式）：32 条新格式事件平均 **53.9k 字符**、p50 **65,536**（预算用满）、无一条塌缩到 5k 以下、`available_skills` 残留 1/22；`FetchPromptSnapshots` 实测 8 个 session → 16 行（latest+mid）
+- [x] **验证中发现并修复两个真实缺陷**（改前单元测试全绿也看不出来）：①尾部取块时"最后一块太短"直接 `break`，导致整段尾部被丢弃、素材塌缩到 **1.9k 字符**——改为 `continue` 继续往前找；②尾部块数硬限 24 块，而块平均只有几百字，**65k 预算只用掉 16k**——改为只按预算停
 - [ ] **待办：dev 验证 + 发布**。迁移 250 在共享库执行是唯一有副作用的步骤（纯增量、旧镜像兼容），发布顺序同 §4.2（dev 冒烟 → 备份 stable tag → 打 stable → 重建生产）
 
 ### 后续迭代

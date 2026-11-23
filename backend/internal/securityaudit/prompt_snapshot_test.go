@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -81,6 +82,82 @@ func TestBuildFullPromptStripsNULAndTruncates(t *testing.T) {
 	degenerate := TrimRunesHeadTail(strings.Repeat("x", 100), 10, 50)
 	require.Equal(t, strings.Repeat("x", 10)+"…", degenerate)
 	require.Equal(t, "短文本", TrimRunesHeadTail("短文本", 100, 8))
+}
+
+func TestFullPromptFromScanTextAllocatesBudgetBySegment(t *testing.T) {
+	latest := "LATEST_MARK " + strings.Repeat("甲", 30000)
+	blocks := make([]string, 0, 60)
+	for i := 0; i < 60; i++ {
+		block := fmt.Sprintf("BLOCK_%02d %s", i, strings.Repeat("乙", 3000))
+		if i == 5 {
+			block = "MIDDLE_MARK " + block
+		}
+		blocks = append(blocks, block)
+	}
+	blocks[len(blocks)-1] += " TAIL_MARK"
+
+	scanText, _ := buildPrioritizedScanText(append([]string{latest}, blocks...))
+	out := FullPromptFromScanText(scanText)
+
+	if n := utf8.RuneCountInString(out); n > DefaultFullPromptMaxRunes {
+		t.Fatalf("full prompt runes = %d, want <= %d", n, DefaultFullPromptMaxRunes)
+	}
+	if !strings.HasPrefix(out, "LATEST_MARK") {
+		t.Fatal("latest user turn must stay at the head")
+	}
+	if !strings.Contains(out, "本轮用户消息过长") {
+		t.Fatal("oversized latest user turn should be truncated with a marker")
+	}
+	if !strings.Contains(out, "TAIL_MARK") {
+		t.Fatal("most recent block must be preserved")
+	}
+	if strings.Contains(out, "MIDDLE_MARK") {
+		t.Fatal("middle history should be dropped under budget pressure")
+	}
+	if !strings.Contains(out, "此处省略") {
+		t.Fatal("dropped region should be marked")
+	}
+}
+
+func TestFullPromptFromScanTextKeepsTailDespiteShortLastBlock(t *testing.T) {
+	// 回归：最后一块很短（例如一句"好的"）时，不能因此放弃整段尾部。
+	latest := "继续"
+	blocks := make([]string, 0, 40)
+	for i := 0; i < 40; i++ {
+		blocks = append(blocks, fmt.Sprintf("BLOCK_%02d %s", i, strings.Repeat("乙", 3000)))
+	}
+	blocks = append(blocks, "好的")
+	blocks[len(blocks)-2] += " NEAR_TAIL_MARK"
+
+	scanText, _ := buildPrioritizedScanText(append([]string{latest}, blocks...))
+	out := FullPromptFromScanText(scanText)
+
+	if !strings.Contains(out, "NEAR_TAIL_MARK") {
+		t.Fatalf("tail blocks should survive a short trailing block, got %d runes", utf8.RuneCountInString(out))
+	}
+	if n := utf8.RuneCountInString(out); n < 10000 {
+		t.Fatalf("material collapsed to %d runes, expected a filled tail", n)
+	}
+}
+
+func TestFullPromptFromScanTextDropsSkillManifest(t *testing.T) {
+	latest := "帮我看看这个报错"
+	skills := "<available_skills>\n- skill-a\n- skill-b\n</available_skills>"
+	system := "SYSTEM_MARK 你是编码助手 " + strings.Repeat("系", 20000)
+	history := strings.Repeat("历史对话内容。", 20000)
+
+	scanText, _ := buildPrioritizedScanText([]string{latest, skills, system, history})
+	out := FullPromptFromScanText(scanText)
+
+	if strings.Contains(out, "available_skills") {
+		t.Fatal("static skill manifest should be dropped")
+	}
+	if !strings.Contains(out, "SYSTEM_MARK") {
+		t.Fatal("some system prompt should be kept for scenario recognition")
+	}
+	if !strings.Contains(out, "帮我看看这个报错") {
+		t.Fatal("latest user turn must be preserved")
+	}
 }
 
 func TestFullPromptFromScanTextRestoresMultiSegmentLayout(t *testing.T) {

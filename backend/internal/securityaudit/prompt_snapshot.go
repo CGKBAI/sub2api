@@ -66,7 +66,7 @@ func extractPromptSnapshot(req Request, latestTurnOnly bool) (PromptSnapshot, er
 		GroupID: cloneInt64Ptr(req.GroupID), GroupName: req.GroupName, Provider: req.Provider,
 		Endpoint: req.Endpoint, Protocol: req.Protocol, Model: req.Model,
 		PromptHash: hex.EncodeToString(digest[:]), RedactedPreview: BuildPromptPreview(metadataText, DefaultPromptPreviewMaxRunes),
-		FullPrompt:   BuildFullPrompt(metadataText, DefaultFullPromptMaxRunes),
+		FullPrompt:   buildFullPromptFromScanText(scanText, DefaultFullPromptMaxRunes),
 		PromptLength: utf8.RuneCountInString(metadataText), MessageCount: len(segments), Stage: stage,
 		ScanText: scanText,
 	}, nil
@@ -81,18 +81,33 @@ const DefaultPromptPreviewMaxRunes = 96
 // prompts are kept intact while bounding per-row storage.
 const DefaultFullPromptMaxRunes = 65536
 
-// fullPromptHeadRunes 是超长 prompt 截断时优先保留的头部长度。
+// fullPromptHeadRunes 是超长 prompt 退化截断（只保头+尾）时优先保留的头部长度。
 //
 // 拍平后的 full_prompt 结构为「该次请求最新一条用户消息 + 其余上下文（system /
-// 历史，保持原顺序）」且段间无角色标记，读取侧无法重建轮次，因此保哪两段只能在
-// 写入侧决定：
-//   - 头部 = 最新用户消息（这一轮的任务是什么），必须完整保留；
-//   - 尾部 = 会话末尾（最近在改什么），对日报最有价值；
-//   - 被省略的是历史中段（中间过程），信息密度最低。
-//
-// 旧实现只保头部（runes[:limit]），超长会话会丢掉整段"最近的工作"，日报素材
-// 退化成会话开头的内容。
+// 历史，保持原顺序）」且段间无角色标记。主路径已改为按段分配预算
+// （buildFullPromptFromScanText），这里只作为兜底：段信息不可用或预算过小时使用。
 const fullPromptHeadRunes = 8192
+
+// 按段分配预算（主路径）的配额。设计目标：同样的 65536 字符，把预算花在
+// "这一轮要干什么"和"最近做完了什么"上，而不是被静态注入块和工具输出吃光。
+const (
+	// fullPromptLatestUserRunes 最新用户消息（段 1）的保留上限。用户粘贴的超长
+	// 日志/文件只保留前 16k——报告要的是"在做什么"，不是"贴了什么"。
+	fullPromptLatestUserRunes = 16384
+	// fullPromptSystemRunes 系统提示词开头（识别客户端/场景）的保留上限。
+	fullPromptSystemRunes = 1536
+	// fullPromptBlockRunes 尾部每个内容块（按空行切分）的保留上限。
+	fullPromptBlockRunes = 2048
+	// fullPromptMinTailBlockRunes 尾部块的最小保留长度，低于此值就不再塞块了。
+	fullPromptMinTailBlockRunes = 256
+)
+
+// fullPromptSegmentSeparator 在段间插入的省略标记（仅用于可读性，不影响语义）。
+const fullPromptSegmentSeparator = "\n\n……（此处省略 %d 段）……\n\n"
+
+// fullPromptSkillManifestMarker 静态技能清单的识别特征。opencode 等客户端把整份
+// 技能清单塞进系统提示词，实测 44% 的超长请求里它都在前 8k 内，对报告零信息量。
+const fullPromptSkillManifestMarker = "</available_skills>"
 
 func extractProtocolSegments(protocol string, document any) []promptSegment {
 	root, _ := document.(map[string]any)
@@ -741,11 +756,180 @@ func TrimRunesHeadTail(value string, limit, head int) string {
 
 // FullPromptFromScanText reconstructs the display prompt from the worker scan
 // payload. buildPrioritizedScanText inserts exactly one priority separator
-// between the prioritized segment and the remainder, so replacing it with the
-// metadata joiner yields the original multi-segment text.
+// between the prioritized segment (latest user message) and the remainder, so
+// splitting on it recovers the exact boundary of the latest user turn.
+//
+// 与旧的「只保头」实现相比，这里按段分配预算（见 fullPromptLatestUserRunes 等）：
+//  1. 最新用户消息（段 1）单独享受 16k 预算 —— 这一轮要干什么最重要；
+//  2. 剩余内容按空行切块，从末尾往前取，每块最多 2k —— 最近的工作上下文；
+//  3. 开头保留一小段系统提示词（1.5k）用于识别客户端/场景；
+//  4. 命中 available_skills 静态技能清单的块直接丢弃；
+//  5. 被跳过的位置插省略标记，输出总长仍 ≤ DefaultFullPromptMaxRunes。
+//
+// 段 1 的边界来自优先级分隔符（精确）；其余部分按空行切块，块边界是段边界的
+// 细分（段本身是用 "\n\n" 连接的），所以尾部取块只会落在真实内容内部，不会
+// 串到更早的内容上。
 func FullPromptFromScanText(scanText string) string {
-	return BuildFullPrompt(strings.ReplaceAll(scanText, promptAuditPrioritySeparator, "\n\n"), DefaultFullPromptMaxRunes)
+	return buildFullPromptFromScanText(scanText, DefaultFullPromptMaxRunes)
 }
+
+func buildFullPromptFromScanText(scanText string, limit int) string {
+	if limit <= 0 {
+		limit = DefaultFullPromptMaxRunes
+	}
+	latest := scanText
+	rest := ""
+	if index := strings.Index(scanText, promptAuditPrioritySeparator); index >= 0 {
+		latest = scanText[:index]
+		rest = scanText[index+len(promptAuditPrioritySeparator):]
+	}
+	// NUL 必须在切分之后剥离：优先级分隔符本身含 \x00，先剥会让切分失效。
+	latest = strings.TrimSpace(strings.ReplaceAll(latest, "\x00", ""))
+	rest = strings.TrimSpace(strings.ReplaceAll(rest, "\x00", ""))
+
+	if runeLen(latest)+runeLen(rest)+2 <= limit {
+		if rest == "" {
+			return latest
+		}
+		return latest + "\n\n" + rest
+	}
+
+	// ① 最新用户消息：保留前 16k（截断处加标记）。
+	var out strings.Builder
+	budget := limit
+	latestText := latest
+	if n := runeLen(latestText); n > fullPromptLatestUserRunes {
+		latestText = string([]rune(latestText)[:fullPromptLatestUserRunes]) +
+			fmt.Sprintf("\n……（本轮用户消息过长，仅保留前 %d 字）……", fullPromptLatestUserRunes)
+	}
+	out.WriteString(latestText)
+	budget -= runeLen(latestText)
+
+	// ② 其余内容切成块，从末尾往前挑，直到预算用尽。
+	// 注意：这里只按**预算**停，不按块数停——块普遍偏小（几百字），限块数会让
+	// 几万字符预算闲置（实测平均只用到 16k/65k）。
+	blocks := splitPromptBlocks(rest)
+	keep := make([]bool, len(blocks))
+	keepCount := 0
+	for index := len(blocks) - 1; index >= 0; index-- {
+		block := blocks[index]
+		if isStaticPromptBlock(block) {
+			continue
+		}
+		remaining := budget - 2 // 预留块间分隔符
+		if remaining < fullPromptMinTailBlockRunes {
+			break
+		}
+		size := runeLen(block)
+		if size > fullPromptBlockRunes {
+			size = fullPromptBlockRunes
+		}
+		if size < fullPromptMinTailBlockRunes {
+			// 太短的块（单行备注、"好的"之类）跳过，但继续往前找：不能因为
+			// 最后一块很短就放弃整段尾部（曾导致素材只剩 1.9k 字符）。
+			continue
+		}
+		if size > remaining {
+			if remaining < fullPromptMinTailBlockRunes {
+				break
+			}
+			size = remaining
+		}
+		keep[index] = true
+		keepCount++
+		budget -= size + 2
+	}
+
+	// ③ 开头补一小段系统提示词（跳过静态技能清单），便于识别客户端/场景。
+	// 系统提示词有意义的是开头（客户端/角色设定），所以这里取块的**前半段**。
+	headBlock := -1
+	for index := 0; index < len(blocks); index++ {
+		if isStaticPromptBlock(blocks[index]) {
+			continue
+		}
+		headBlock = index
+		break
+	}
+	if headBlock >= 0 && !keep[headBlock] {
+		if budget > fullPromptSystemRunes {
+			keep[headBlock] = true
+			budget -= fullPromptSystemRunes + 2
+		} else {
+			headBlock = -1
+		}
+	}
+
+	if keepCount == 0 && headBlock < 0 {
+		// 完全没有可保留的块：退化为头+尾兜底。
+		flat := strings.ReplaceAll(scanText, promptAuditPrioritySeparator, "\n\n")
+		return TrimRunesHeadTail(strings.ReplaceAll(flat, "\x00", ""), limit, fullPromptHeadRunes)
+	}
+
+	// ④ 按原顺序拼接，跳过的地方插省略标记。
+	omitted := 0
+	flushOmitted := func() {
+		if omitted > 0 {
+			out.WriteString(fmt.Sprintf(fullPromptSegmentSeparator, omitted))
+			omitted = 0
+		}
+	}
+	for index, block := range blocks {
+		if !keep[index] {
+			omitted++
+			continue
+		}
+		flushOmitted()
+		out.WriteString("\n\n")
+		out.WriteString(trimPromptBlock(block, index, headBlock))
+	}
+	if omitted > 0 {
+		out.WriteString(fmt.Sprintf(fullPromptSegmentSeparator, omitted))
+	}
+
+	result := strings.TrimSpace(out.String())
+	if n := runeLen(result); n > limit {
+		result = TrimRunesHeadTail(result, limit, fullPromptHeadRunes)
+	}
+	return result
+}
+
+// splitPromptBlocks 按空行切块（段本身也是用 "\n\n" 连接的，块是段的细分）。
+func splitPromptBlocks(text string) []string {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	raw := strings.Split(text, "\n\n")
+	blocks := make([]string, 0, len(raw))
+	for _, block := range raw {
+		if block = strings.TrimSpace(block); block != "" {
+			blocks = append(blocks, block)
+		}
+	}
+	return blocks
+}
+
+// isStaticPromptBlock 判断是否为静态噪音块（技能清单等），这类块不进报告素材。
+func isStaticPromptBlock(block string) bool {
+	return strings.Contains(block, fullPromptSkillManifestMarker)
+}
+
+// trimPromptBlock 截断单个块：系统提示词取开头，尾部块取末尾（越靠后越接近"现在"）。
+func trimPromptBlock(block string, index, headBlock int) string {
+	runes := []rune(block)
+	limit := fullPromptBlockRunes
+	if index == headBlock {
+		limit = fullPromptSystemRunes
+	}
+	if len(runes) <= limit {
+		return block
+	}
+	if index == headBlock {
+		return string(runes[:limit]) + "…"
+	}
+	return "…" + string(runes[len(runes)-limit:])
+}
+
+func runeLen(value string) int { return len([]rune(value)) }
 
 func TrimRunes(value string, limit int) string {
 	if limit <= 0 {
