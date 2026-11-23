@@ -46,7 +46,8 @@ export default {
       pushed: 'Pushed',
       pushFailed: 'Push failed',
       pushSuccessCount: 'Pushed to {ok}/{total} groups',
-      pushPartial: 'Partial failure {ok}/{total} groups'
+      pushPartial: 'Partial failure {ok}/{total} groups',
+      qualityWarn: '⚠️ Quality notice'
     },
     goal: {
       title: 'Recent Goals',

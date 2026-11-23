@@ -39,6 +39,8 @@ type Report struct {
 	PushedAt *time.Time `json:"pushed_at,omitempty"`
 	// 最近一次飞书推送失败原因（成功时清空）
 	LastPushError string `json:"last_push_error,omitempty"`
+	// 生成后质量校验遗留问题（多条用；分隔，空串=通过）
+	QualityWarnings string `json:"quality_warnings,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -55,7 +57,7 @@ func (*Report) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case report.FieldID, report.FieldUserID:
 			values[i] = new(sql.NullInt64)
-		case report.FieldType, report.FieldAiSummary, report.FieldStatus, report.FieldError, report.FieldLastPushError:
+		case report.FieldType, report.FieldAiSummary, report.FieldStatus, report.FieldError, report.FieldLastPushError, report.FieldQualityWarnings:
 			values[i] = new(sql.NullString)
 		case report.FieldPeriodStart, report.FieldPeriodEnd, report.FieldPushedAt, report.FieldCreatedAt, report.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -143,6 +145,12 @@ func (_m *Report) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.LastPushError = value.String
 			}
+		case report.FieldQualityWarnings:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field quality_warnings", values[i])
+			} else if value.Valid {
+				_m.QualityWarnings = value.String
+			}
 		case report.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field created_at", values[i])
@@ -222,6 +230,9 @@ func (_m *Report) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("last_push_error=")
 	builder.WriteString(_m.LastPushError)
+	builder.WriteString(", ")
+	builder.WriteString("quality_warnings=")
+	builder.WriteString(_m.QualityWarnings)
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

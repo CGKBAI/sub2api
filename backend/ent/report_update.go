@@ -182,6 +182,20 @@ func (_u *ReportUpdate) SetNillableLastPushError(v *string) *ReportUpdate {
 	return _u
 }
 
+// SetQualityWarnings sets the "quality_warnings" field.
+func (_u *ReportUpdate) SetQualityWarnings(v string) *ReportUpdate {
+	_u.mutation.SetQualityWarnings(v)
+	return _u
+}
+
+// SetNillableQualityWarnings sets the "quality_warnings" field if the given value is not nil.
+func (_u *ReportUpdate) SetNillableQualityWarnings(v *string) *ReportUpdate {
+	if v != nil {
+		_u.SetQualityWarnings(*v)
+	}
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *ReportUpdate) SetUpdatedAt(v time.Time) *ReportUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -291,6 +305,9 @@ func (_u *ReportUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.LastPushError(); ok {
 		_spec.SetField(report.FieldLastPushError, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.QualityWarnings(); ok {
+		_spec.SetField(report.FieldQualityWarnings, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(report.FieldUpdatedAt, field.TypeTime, value)
@@ -468,6 +485,20 @@ func (_u *ReportUpdateOne) SetNillableLastPushError(v *string) *ReportUpdateOne 
 	return _u
 }
 
+// SetQualityWarnings sets the "quality_warnings" field.
+func (_u *ReportUpdateOne) SetQualityWarnings(v string) *ReportUpdateOne {
+	_u.mutation.SetQualityWarnings(v)
+	return _u
+}
+
+// SetNillableQualityWarnings sets the "quality_warnings" field if the given value is not nil.
+func (_u *ReportUpdateOne) SetNillableQualityWarnings(v *string) *ReportUpdateOne {
+	if v != nil {
+		_u.SetQualityWarnings(*v)
+	}
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *ReportUpdateOne) SetUpdatedAt(v time.Time) *ReportUpdateOne {
 	_u.mutation.SetUpdatedAt(v)
@@ -607,6 +638,9 @@ func (_u *ReportUpdateOne) sqlSave(ctx context.Context) (_node *Report, err erro
 	}
 	if value, ok := _u.mutation.LastPushError(); ok {
 		_spec.SetField(report.FieldLastPushError, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.QualityWarnings(); ok {
+		_spec.SetField(report.FieldQualityWarnings, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(report.FieldUpdatedAt, field.TypeTime, value)

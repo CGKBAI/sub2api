@@ -33,6 +33,8 @@ const (
 	FieldPushedAt = "pushed_at"
 	// FieldLastPushError holds the string denoting the last_push_error field in the database.
 	FieldLastPushError = "last_push_error"
+	// FieldQualityWarnings holds the string denoting the quality_warnings field in the database.
+	FieldQualityWarnings = "quality_warnings"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -54,6 +56,7 @@ var Columns = []string{
 	FieldError,
 	FieldPushedAt,
 	FieldLastPushError,
+	FieldQualityWarnings,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -81,6 +84,8 @@ var (
 	DefaultError string
 	// DefaultLastPushError holds the default value on creation for the "last_push_error" field.
 	DefaultLastPushError string
+	// DefaultQualityWarnings holds the default value on creation for the "quality_warnings" field.
+	DefaultQualityWarnings string
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -140,6 +145,11 @@ func ByPushedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByLastPushError orders the results by the last_push_error field.
 func ByLastPushError(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLastPushError, opts...).ToFunc()
+}
+
+// ByQualityWarnings orders the results by the quality_warnings field.
+func ByQualityWarnings(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQualityWarnings, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

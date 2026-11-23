@@ -28,12 +28,27 @@ const reportDailyMinRequests = 10
 // 报告对话窗口采样参数：快照按 session 分组拉取（每 session 取最全一条，最多
 // reportSnapshotCount 个 session）；全部窗口预算 conversationWindowBudget 按
 // session 数均分，单 session 不超过 conversationWindowsPerSnapCap 个窗口。
+//
+// 单个窗口 1000 rune（≈500 汉字）才能装下一条「问题 + 解法」；总预算 48 个窗口
+// 让单日素材上限约 4.8 万字符，与 reportUserPromptMaxRunes 总量预算相配。
 const (
 	reportSnapshotCount           = 8
-	conversationWindowBudget      = 32
+	conversationWindowBudget      = 48
 	conversationWindowsPerSnapCap = 8
-	conversationWindowRunes       = 700
+	conversationWindowRunes       = 1000
 	conversationRegionAnchor      = "</available_skills>"
+	// conversationTailRegionPct 尾部优先采样的比例：后 30% 的对话区分到一半窗口。
+	// 日报最关心"最近在做什么"，等距盲采会让开头和中段的噪音等概率入选。
+	conversationTailRegionPct = 0.3
+	// conversationWindowSnapMax 窗口起点向段首吸附的最大步长（rune）。
+	conversationWindowSnapMax = 240
+	// conversationHeadNoiseRunes 锚点缺失时丢弃的前缀长度（rune），用于绕过
+	// 智能体客户端置于头部的系统提示词/工具清单。
+	conversationHeadNoiseRunes = 8192
+	// reportUserPromptMaxRunes 单篇报告注入 LLM 的 user prompt 总预算（rune）。
+	// 超预算时按"先丢最早素材"的顺序裁剪，避免请求体超出模型上下文后由
+	// 服务端静默截断（那样丢哪段完全不可控）。
+	reportUserPromptMaxRunes = 80000
 )
 
 // ReportService 日报/周报核心服务。
@@ -139,11 +154,12 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 	}
 	report.Username = username
 
-	summary, llmErr := s.buildSummary(ctx, cfg, reportType, start, end, userID, username, &stats)
+	summary, qualityWarnings, llmErr := s.buildSummary(ctx, cfg, reportType, start, end, userID, username, &stats)
 	if llmErr != nil {
 		if errors.Is(llmErr, domain.ErrReportLLMNotConfigured) {
 			// LLM 未配置：产出纯统计报告，不算失败
 			summary = ""
+			qualityWarnings = nil
 		} else {
 			// LLM 失败：若该周期已有生成成功的报告（含摘要），保留旧报告不覆盖，
 			// 避免定时重试/手动重生成偶发失败摧毁原有成果
@@ -157,11 +173,18 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 			report.Status = domain.ReportStatusFailed
 			report.Error = truncateReportError(llmErr.Error())
 			report.AISummary = ""
+			report.QualityWarnings = ""
 			report.Stats = stats
 			return s.persist(ctx, report)
 		}
 	}
+	if len(qualityWarnings) > 0 {
+		logger.LegacyPrintf("service.report",
+			"[Report] %s report for user %d generated with quality warnings: %s",
+			reportType, userID, strings.Join(qualityWarnings, "；"))
+	}
 	report.AISummary = summary
+	report.QualityWarnings = truncateQualityWarnings(qualityWarnings)
 	report.Error = ""
 	report.Stats = stats
 	saved, err := s.persist(ctx, report)
@@ -180,8 +203,19 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 // （best-effort：失败仅记日志，不影响生成结果）。
 // 生效条件：feishu_enabled + 对应类型推送开关 + 用户参与推送（users.report_push_enabled），
 // 然后投递到该用户所属的所有启用群组。
+//
+// 幂等：该报告此前已推送成功（pushed_at 非空）时不再自动推。persist 的 Update
+// 不触碰 pushed_at，因此重生成同周期报告时该字段仍是上次的真实推送状态——
+// Redis 评估标记丢失、leader 切换、节假日模式切换等导致的"同周期再生成一次"
+// 不会把同一份报告重复刷进群。需要补发/更新请用卡片上的手动推送按钮。
 func (s *ReportService) maybeAutoPushFeishu(ctx context.Context, cfg *ReportLLMConfig, report *Report) {
 	if s == nil || s.feishu == nil || report == nil || report.Status != domain.ReportStatusDone {
+		return
+	}
+	if report.PushedAt != nil {
+		logger.LegacyPrintf("service.report",
+			"[ReportFeishu] auto push skipped for report %d (%s): already pushed at %s",
+			report.ID, report.Type, report.PushedAt.Format("2006-01-02 15:04"))
 		return
 	}
 	if cfg == nil || !cfg.FeishuEnabled {
@@ -401,6 +435,9 @@ func (s *ReportService) persist(ctx context.Context, r *Report) (*Report, error)
 // 周报聚合本周日报摘要；月报优先聚合当月周报摘要、降级聚合当月日报摘要；
 // 聚合不到子报告时与日报一致：直接拉取周期内 prompt 片段。
 // LLM 只输出正文两个小节，标题（含姓名）由后端拼接，保证姓名/日期准确。
+//
+// 返回质量警告（非空表示正文通过了硬规则但存在软问题，或重写后仍有硬违规），
+// 由调用方落库到 reports.quality_warnings 供前端 ⚠️ 标记；正文照常返回。
 func (s *ReportService) buildSummary(
 	ctx context.Context,
 	cfg *ReportLLMConfig,
@@ -409,46 +446,83 @@ func (s *ReportService) buildSummary(
 	userID int64,
 	username string,
 	stats *ReportStats,
-) (string, error) {
-	systemPrompt := reportSystemPrompt(reportType)
+) (string, []string, error) {
+	userPrompt, hasGoal, err := s.buildSummaryPrompt(ctx, cfg, reportType, start, end, userID, stats)
+	if err != nil {
+		return "", nil, err
+	}
+	if !reportLLMConfigured(cfg) {
+		return "", nil, domain.ErrReportLLMNotConfigured
+	}
 
-	var userPrompt strings.Builder
-	userPrompt.WriteString(fmt.Sprintf("周期：%s ~ %s\n", start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04")))
+	llmCtx, cancel := context.WithTimeout(ctx, reportLLMTimeout)
+	defer cancel()
+
+	body, warnings, err := s.completeCheckedReport(llmCtx, cfg, reportSystemPrompt(reportType), userPrompt, reportType, hasGoal)
+	if err != nil {
+		return "", nil, err
+	}
+	return reportTitle(reportType, start, username) + "\n\n" + body, warnings, nil
+}
+
+func reportLLMConfigured(cfg *ReportLLMConfig) bool {
+	return cfg != nil && (cfg.Enabled || (cfg.BaseURL != "" && cfg.APIKey != "" && cfg.Model != ""))
+}
+
+// buildSummaryPrompt 组装注入 LLM 的 user prompt，并按 reportUserPromptMaxRunes
+// 做总量裁剪。hasGoal 表示日报上下文中注入了「用户近期目标」（决定是否要求第三节）。
+func (s *ReportService) buildSummaryPrompt(
+	ctx context.Context,
+	cfg *ReportLLMConfig,
+	reportType string,
+	start, end time.Time,
+	userID int64,
+	stats *ReportStats,
+) (string, bool, error) {
+	var fixed strings.Builder
+	fixed.WriteString(fmt.Sprintf("周期：%s ~ %s\n", start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04")))
 
 	// 日报读取用户自行填写的近期目标（users.report_goal）：非空时注入上下文，
 	// 供「明日工作计划」围绕目标拆解（读取失败降级为无目标生成，不阻断报告）。
 	// 周报/月报聚合日报摘要时目标已自然继承，不直接读取。
+	hasGoal := false
 	if reportType == domain.ReportTypeDaily {
 		goal, gErr := s.reportRepo.GetReportGoal(ctx, userID)
 		if gErr != nil {
 			logger.LegacyPrintf("service.report", "[Report] fetch report goal for user %d: %v", userID, gErr)
 		} else if goal = strings.TrimSpace(goal); goal != "" {
-			userPrompt.WriteString("\n### 用户近期目标（用户自行填写，制定计划时必须对齐）\n")
-			userPrompt.WriteString(goal + "\n")
+			hasGoal = true
+			fixed.WriteString("\n### 用户近期目标（用户自行填写，制定计划时必须对齐）\n")
+			fixed.WriteString(goal + "\n")
 		}
 	}
 
+	// 子报告聚合（周报/月报）：直接读取已生成的日报/周报摘要。
 	aggregated := false
+	var aggregatedBlock strings.Builder
 	switch reportType {
 	case domain.ReportTypeWeekly:
-		aggregated = s.appendSubReports(ctx, &userPrompt, domain.ReportTypeDaily, start, end, 7, userID)
+		aggregated = s.appendSubReports(ctx, &aggregatedBlock, domain.ReportTypeDaily, start, end, 7, userID)
 	case domain.ReportTypeMonthly:
-		aggregated = s.appendSubReports(ctx, &userPrompt, domain.ReportTypeWeekly, start, end, 8, userID)
+		aggregated = s.appendSubReports(ctx, &aggregatedBlock, domain.ReportTypeWeekly, start, end, 8, userID)
 		if !aggregated {
-			aggregated = s.appendSubReports(ctx, &userPrompt, domain.ReportTypeDaily, start, end, 31, userID)
+			aggregated = s.appendSubReports(ctx, &aggregatedBlock, domain.ReportTypeDaily, start, end, 31, userID)
 		}
 	}
 
-	if !aggregated && (cfg.Enabled || (cfg.BaseURL != "" && cfg.APIKey != "" && cfg.Model != "")) {
+	var items []string
+	var windows []string
+	var turnCount int
+	if !aggregated && reportLLMConfigured(cfg) {
 		turns, err := s.reportRepo.FetchUserTurns(ctx, userID, start, end, maxReportTurns)
 		if err == nil && len(turns) > 0 {
+			turnCount = len(turns)
 			stats.PromptCount = int64(len(turns))
-			items := collectUserTurns(turns, cfg.PromptTruncateChars)
-			if len(items) > 0 {
-				userPrompt.WriteString(fmt.Sprintf("\n### 用户提问记录（共 %d 次请求，提取去重后 %d 条有效提问，按时间正序）\n", len(turns), len(items)))
-				for _, it := range items {
-					userPrompt.WriteString(it + "\n")
-				}
+			items = collectUserTurns(turns, cfg.PromptTruncateChars)
+			// max_prompts 配置此前是死配置（一直用 maxReportTurns）：这里按"去重后
+			// 最多注入多少条有效提问"生效，超出时保留最近的条目。
+			if maxItems := cfg.MaxPrompts; maxItems > 0 && len(items) > maxItems {
+				items = items[len(items)-maxItems:]
 			}
 		}
 		// 智能体客户端（opencode 等）的用户输入混在会话历史深处，头部提取拿不到；
@@ -456,34 +530,135 @@ func (s *ReportService) buildSummary(
 		// 快照按 session 分组：每 session 取上下文最全的一条，最多 reportSnapshotCount 个。
 		snaps, serr := s.reportRepo.FetchPromptSnapshots(ctx, userID, start, end, reportSnapshotCount)
 		if serr == nil && len(snaps) > 0 {
-			windows := collectConversationWindows(snaps)
-			if len(windows) > 0 {
-				userPrompt.WriteString(fmt.Sprintf("\n### 对话记录片段（截取自 %d 个会话的最完整快照，每会话均匀采样，按时间排列，含用户输入/助手回复/工具输出）\n", len(snaps)))
-				for _, w := range windows {
-					userPrompt.WriteString("- " + w + "\n")
-				}
-			}
+			windows = collectConversationWindows(snaps)
 		}
 	}
 
-	userPrompt.WriteString("\n### 统计数字\n")
-	userPrompt.WriteString(fmt.Sprintf("- 请求次数：%d\n", stats.Requests))
-	userPrompt.WriteString(fmt.Sprintf("- 输入/输出 tokens：%d / %d\n", stats.InputTokens, stats.OutputTokens))
-	userPrompt.WriteString(fmt.Sprintf("- 费用：%.4f\n", stats.TotalCost))
-	userPrompt.WriteString("- 模型分布：" + formatModelCounts(stats.Models) + "\n")
-	userPrompt.WriteString("- 活跃时段：" + formatHourly(stats.Hourly) + "\n")
+	var statsBlock strings.Builder
+	statsBlock.WriteString("\n### 统计数字\n")
+	statsBlock.WriteString(fmt.Sprintf("- 请求次数：%d\n", stats.Requests))
+	statsBlock.WriteString(fmt.Sprintf("- 输入/输出 tokens：%d / %d\n", stats.InputTokens, stats.OutputTokens))
+	statsBlock.WriteString(fmt.Sprintf("- 费用：%.4f\n", stats.TotalCost))
+	statsBlock.WriteString("- 模型分布：" + formatModelCounts(stats.Models) + "\n")
+	statsBlock.WriteString("- 活跃时段：" + formatHourly(stats.Hourly) + "\n")
 
-	if !(cfg.Enabled || (cfg.BaseURL != "" && cfg.APIKey != "" && cfg.Model != "")) {
-		return "", domain.ErrReportLLMNotConfigured
+	// 总量预算：固定部分优先保留，剩余额度在「提问记录」与「对话片段」之间分配。
+	// 超预算时从最早的一条开始丢（两者都按时间正序），保证最近的工作留下。
+	budget := reportUserPromptMaxRunes - runeLen(fixed.String()) - runeLen(aggregatedBlock.String()) - runeLen(statsBlock.String())
+	if budget < 0 {
+		budget = 0
+	}
+	for runeLen(strings.Join(items, ""))+runeLen(strings.Join(windows, "")) > budget {
+		if len(items) == 0 && len(windows) == 0 {
+			break
+		}
+		// 交替裁剪，避免某一类素材被整体丢光。
+		if len(items) >= len(windows) && len(items) > 0 {
+			items = items[1:]
+			continue
+		}
+		if len(windows) > 0 {
+			windows = windows[1:]
+			continue
+		}
+		items = items[1:]
 	}
 
-	llmCtx, cancel := context.WithTimeout(ctx, reportLLMTimeout)
-	defer cancel()
-	content, err := s.llm.ChatComplete(llmCtx, cfg, systemPrompt, userPrompt.String())
+	var b strings.Builder
+	b.WriteString(fixed.String())
+	b.WriteString(aggregatedBlock.String())
+	if len(items) > 0 {
+		b.WriteString(fmt.Sprintf("\n### 用户提问记录（共 %d 次请求，提取去重后 %d 条有效提问，按时间正序）\n", turnCount, len(items)))
+		for _, it := range items {
+			b.WriteString(it + "\n")
+		}
+	}
+	if len(windows) > 0 {
+		b.WriteString(fmt.Sprintf("\n### 对话记录片段（截取自 %d 个会话的最完整快照，尾部优先采样，按时间排列，含用户输入/助手回复/工具输出）\n", reportSnapshotCount))
+		for _, w := range windows {
+			b.WriteString("- " + w + "\n")
+		}
+	}
+	b.WriteString(statsBlock.String())
+	return b.String(), hasGoal, nil
+}
+
+func runeLen(s string) int { return len([]rune(s)) }
+
+// completeCheckedReport 调用 LLM 生成正文并做确定性质量校验。
+// 命中硬违规时把违规清单回灌重写一次；重写仍不通过则选更轻的一份照发并返回
+// 警告。唯一例外：敏感信息在两次输出中都出现时整篇判失败（不落库、不推送）。
+func (s *ReportService) completeCheckedReport(
+	ctx context.Context,
+	cfg *ReportLLMConfig,
+	systemPrompt, userPrompt, reportType string,
+	hasGoal bool,
+) (string, []string, error) {
+	body, err := s.llm.ChatComplete(ctx, cfg, systemPrompt, userPrompt)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return reportTitle(reportType, start, username) + "\n\n" + content, nil
+	body = sanitizeReportBody(body)
+	first := checkReportQuality(body, reportType, hasGoal)
+	if len(first.Hard) == 0 {
+		// 软问题（条目数/过长/代码块/空泛措辞）只记日志，不打扰作者：
+		// 若软问题也打 ⚠️，多数正常报告都会带标记，徽标就失去意义了。
+		logReportQualitySoft(reportType, first.Soft)
+		return body, nil, nil
+	}
+
+	// 预算已耗尽（调度器批量生成的 30min 上限）时不再重试，直接照发并标记。
+	if ctx.Err() != nil {
+		if first.Sensitive {
+			return "", nil, domain.ErrReportSensitiveContent
+		}
+		return body, reportQualityWarningsList(first), nil
+	}
+
+	logger.LegacyPrintf("service.report",
+		"[Report] quality check failed for %s report, retrying once: %s", reportType, strings.Join(first.Hard, "；"))
+
+	retried, retryErr := s.llm.ChatComplete(ctx, cfg, systemPrompt+reportQualityRetryNote(first), userPrompt)
+	if retryErr != nil {
+		logger.LegacyPrintf("service.report", "[Report] quality retry call failed: %v", retryErr)
+		if first.Sensitive {
+			return "", nil, domain.ErrReportSensitiveContent
+		}
+		return body, reportQualityWarningsList(first), nil
+	}
+	retried = sanitizeReportBody(retried)
+	second := checkReportQuality(retried, reportType, hasGoal)
+
+	best, bestResult := body, first
+	if second.Sensitive != first.Sensitive {
+		// 无敏感信息的那一份优先（敏感信息不可用）。
+		if first.Sensitive {
+			best, bestResult = retried, second
+		}
+	} else if len(second.Hard) < len(first.Hard) {
+		best, bestResult = retried, second
+	}
+	if bestResult.Sensitive {
+		return "", nil, domain.ErrReportSensitiveContent
+	}
+	return best, reportQualityWarningsList(bestResult), nil
+}
+
+// logReportQualitySoft 记录不阻断的软问题（仅供排查，不落库、不打徽标）。
+func logReportQualitySoft(reportType string, soft []string) {
+	if len(soft) == 0 {
+		return
+	}
+	logger.LegacyPrintf("service.report",
+		"[Report] %s report soft quality issues: %s", reportType, strings.Join(soft, "；"))
+}
+
+// reportQualityWarningsList 合并硬违规与软问题作为落库警告。
+func reportQualityWarningsList(v reportQualityResult) []string {
+	all := make([]string, 0, len(v.Hard)+len(v.Soft))
+	all = append(all, v.Hard...)
+	all = append(all, v.Soft...)
+	return uniqueStrings(all)
 }
 
 // reportTitle 构造报告标题行（姓名来自 users.username，不依赖 LLM）。
@@ -641,31 +816,141 @@ func collectConversationWindows(snaps []UserPromptSnippet) []string {
 	return out
 }
 
-// sampleWindows 在 region 内均匀抽 n 个长为 size（rune）的窗口，去掉首尾空白。
+// sampleWindows 在 region 内抽取 n 个长为 size（rune）的窗口。
+//
+// 与旧实现（等距盲采 + 硬切）相比有三点差异：
+//  1. 尾部优先：后 30% 的对话区分到一半窗口预算，让"最近在做什么"更容易入选；
+//  2. 段首对齐：起点向后吸附到最近的段落开头（或代码块边界），不再切在半句/
+//     半个代码块中间——素材出现半句话时 LLM 只能猜，猜就是编；
+//  3. 跳过代码块：窗口落在 ``` 围栏内的直接丢弃（工具输出对日报价值最低）。
 func sampleWindows(text string, n, size int) []string {
 	region := text
+	anchored := false
 	if i := strings.Index(region, conversationRegionAnchor); i >= 0 {
 		region = region[i+len(conversationRegionAnchor):]
+		anchored = true
 	}
-	runes := []rune(region)
-	if len(runes) <= size {
-		if w := strings.TrimSpace(region); w != "" {
-			return []string{w}
-		}
-		return nil
+	if size <= 0 {
+		size = conversationWindowRunes
 	}
 	if n < 2 {
 		n = 2
 	}
-	step := (len(runes) - size) / (n - 1)
-	windows := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		start := i * step
-		if w := strings.TrimSpace(string(runes[start : start+size])); w != "" {
-			windows = append(windows, w)
+	runes := []rune(region)
+	// 锚点缺失时的兜底：超长文本的前段大概率是系统提示词/工具清单（普通聊天
+	// 客户端不会这么长），先丢弃再采样，避免窗口全落在噪音里。
+	if !anchored && len(runes) > 4*conversationHeadNoiseRunes {
+		runes = runes[conversationHeadNoiseRunes:]
+	}
+	if len(runes) <= size {
+		if w := strings.TrimSpace(string(runes)); w != "" {
+			return []string{w}
+		}
+		return nil
+	}
+
+	// 尾部优先：headN 窗口铺在前段，tailN 窗口铺在后 30%。
+	tailStart := len(runes) - int(float64(len(runes))*conversationTailRegionPct)
+	if tailStart < size {
+		tailStart = size
+	}
+	if tailStart > len(runes)-size {
+		tailStart = len(runes) - size
+	}
+	headN := n / 2
+	tailN := n - headN
+	// 尾段装不下一个窗口时全部交给前段，避免预算被"短尾段"吞掉。
+	tailLen := len(runes) - tailStart
+	if tailLen < size {
+		headN, tailN = n, 0
+	} else {
+		// 尾段能容纳的独立窗口数（至少 1 个整块窗口），超出的回填前段，
+		// 保证总窗口数稳定不被短区域吞掉。
+		maxTail := tailLen / size
+		if maxTail < 1 {
+			maxTail = 1
+		}
+		if maxTail < tailN {
+			headN += tailN - maxTail
+			tailN = maxTail
 		}
 	}
+
+	windows := make([]string, 0, n)
+	windows = append(windows, sampleEvenWindows(runes[:tailStart], headN, size)...)
+	windows = append(windows, sampleEvenWindows(runes[tailStart:], tailN, size)...)
 	return windows
+}
+
+// sampleEvenWindows 在 runes 内等距抽 count 个窗口，起点向段首吸附并跳过代码块。
+func sampleEvenWindows(runes []rune, count, size int) []string {
+	if count <= 0 || len(runes) == 0 {
+		return nil
+	}
+	if len(runes) <= size {
+		if w := strings.TrimSpace(string(runes)); w != "" {
+			return []string{w}
+		}
+		return nil
+	}
+	span := len(runes) - size
+	out := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		start := 0
+		if count > 1 {
+			start = i * span / (count - 1)
+		}
+		start = snapToParagraphStart(runes, start, size)
+		end := start + size
+		if end > len(runes) {
+			end = len(runes)
+		}
+		if insideFencedCode(runes, start) {
+			continue
+		}
+		if w := strings.TrimSpace(string(runes[start:end])); w != "" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// snapToParagraphStart 把窗口起点向后吸附到最近的段落/代码块开头（最多
+// conversationWindowSnapMax rune），保证素材不从一个句子的中间开始。
+func snapToParagraphStart(runes []rune, start, size int) int {
+	if start <= 0 {
+		return 0
+	}
+	maxStart := len(runes) - size
+	if maxStart <= 0 {
+		return 0
+	}
+	limit := start + conversationWindowSnapMax
+	if limit > maxStart {
+		limit = maxStart
+	}
+	for i := start; i < limit; i++ {
+		if runes[i] != '\n' || i+1 >= len(runes) {
+			continue
+		}
+		next := runes[i+1]
+		if next == '\n' || next == '#' || next == '-' || next == '*' {
+			return i + 1
+		}
+	}
+	return start
+}
+
+// insideFencedCode 判断 pos 是否落在 ``` 代码围栏内部（围栏计数为奇数）。
+func insideFencedCode(runes []rune, pos int) bool {
+	fences := 0
+	for i := 0; i+2 < pos; i++ {
+		if runes[i] == '`' && runes[i+1] == '`' && runes[i+2] == '`' {
+			fences++
+			i += 2
+		}
+	}
+	return fences%2 == 1
 }
 
 // appendSubReports 把周期内已生成的子报告（日报/周报）AI 摘要按时间正序追加进 LLM
@@ -782,6 +1067,11 @@ func truncateReportError(s string) string {
 		return s[:1000]
 	}
 	return s
+}
+
+// truncateQualityWarnings 把质量警告压成落库的一行（多条用「；」分隔，上限 500 字）。
+func truncateQualityWarnings(items []string) string {
+	return reportQualityWarnings(reportQualityResult{Hard: items})
 }
 
 func formatModelCounts(models map[string]int64) string {

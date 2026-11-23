@@ -123,6 +123,20 @@ func (_c *ReportCreate) SetNillableLastPushError(v *string) *ReportCreate {
 	return _c
 }
 
+// SetQualityWarnings sets the "quality_warnings" field.
+func (_c *ReportCreate) SetQualityWarnings(v string) *ReportCreate {
+	_c.mutation.SetQualityWarnings(v)
+	return _c
+}
+
+// SetNillableQualityWarnings sets the "quality_warnings" field if the given value is not nil.
+func (_c *ReportCreate) SetNillableQualityWarnings(v *string) *ReportCreate {
+	if v != nil {
+		_c.SetQualityWarnings(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *ReportCreate) SetCreatedAt(v time.Time) *ReportCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -202,6 +216,10 @@ func (_c *ReportCreate) defaults() {
 		v := report.DefaultLastPushError
 		_c.mutation.SetLastPushError(v)
 	}
+	if _, ok := _c.mutation.QualityWarnings(); !ok {
+		v := report.DefaultQualityWarnings
+		_c.mutation.SetQualityWarnings(v)
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := report.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
@@ -250,6 +268,9 @@ func (_c *ReportCreate) check() error {
 	}
 	if _, ok := _c.mutation.LastPushError(); !ok {
 		return &ValidationError{Name: "last_push_error", err: errors.New(`ent: missing required field "Report.last_push_error"`)}
+	}
+	if _, ok := _c.mutation.QualityWarnings(); !ok {
+		return &ValidationError{Name: "quality_warnings", err: errors.New(`ent: missing required field "Report.quality_warnings"`)}
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "Report.created_at"`)}
@@ -323,6 +344,10 @@ func (_c *ReportCreate) createSpec() (*Report, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.LastPushError(); ok {
 		_spec.SetField(report.FieldLastPushError, field.TypeString, value)
 		_node.LastPushError = value
+	}
+	if value, ok := _c.mutation.QualityWarnings(); ok {
+		_spec.SetField(report.FieldQualityWarnings, field.TypeString, value)
+		_node.QualityWarnings = value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(report.FieldCreatedAt, field.TypeTime, value)
@@ -513,6 +538,18 @@ func (u *ReportUpsert) SetLastPushError(v string) *ReportUpsert {
 // UpdateLastPushError sets the "last_push_error" field to the value that was provided on create.
 func (u *ReportUpsert) UpdateLastPushError() *ReportUpsert {
 	u.SetExcluded(report.FieldLastPushError)
+	return u
+}
+
+// SetQualityWarnings sets the "quality_warnings" field.
+func (u *ReportUpsert) SetQualityWarnings(v string) *ReportUpsert {
+	u.Set(report.FieldQualityWarnings, v)
+	return u
+}
+
+// UpdateQualityWarnings sets the "quality_warnings" field to the value that was provided on create.
+func (u *ReportUpsert) UpdateQualityWarnings() *ReportUpsert {
+	u.SetExcluded(report.FieldQualityWarnings)
 	return u
 }
 
@@ -724,6 +761,20 @@ func (u *ReportUpsertOne) SetLastPushError(v string) *ReportUpsertOne {
 func (u *ReportUpsertOne) UpdateLastPushError() *ReportUpsertOne {
 	return u.Update(func(s *ReportUpsert) {
 		s.UpdateLastPushError()
+	})
+}
+
+// SetQualityWarnings sets the "quality_warnings" field.
+func (u *ReportUpsertOne) SetQualityWarnings(v string) *ReportUpsertOne {
+	return u.Update(func(s *ReportUpsert) {
+		s.SetQualityWarnings(v)
+	})
+}
+
+// UpdateQualityWarnings sets the "quality_warnings" field to the value that was provided on create.
+func (u *ReportUpsertOne) UpdateQualityWarnings() *ReportUpsertOne {
+	return u.Update(func(s *ReportUpsert) {
+		s.UpdateQualityWarnings()
 	})
 }
 
@@ -1103,6 +1154,20 @@ func (u *ReportUpsertBulk) SetLastPushError(v string) *ReportUpsertBulk {
 func (u *ReportUpsertBulk) UpdateLastPushError() *ReportUpsertBulk {
 	return u.Update(func(s *ReportUpsert) {
 		s.UpdateLastPushError()
+	})
+}
+
+// SetQualityWarnings sets the "quality_warnings" field.
+func (u *ReportUpsertBulk) SetQualityWarnings(v string) *ReportUpsertBulk {
+	return u.Update(func(s *ReportUpsert) {
+		s.SetQualityWarnings(v)
+	})
+}
+
+// UpdateQualityWarnings sets the "quality_warnings" field to the value that was provided on create.
+func (u *ReportUpsertBulk) UpdateQualityWarnings() *ReportUpsertBulk {
+	return u.Update(func(s *ReportUpsert) {
+		s.UpdateQualityWarnings()
 	})
 }
 

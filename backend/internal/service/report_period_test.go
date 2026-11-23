@@ -98,9 +98,9 @@ func TestReportPeriodDailyUnchanged(t *testing.T) {
 	}
 }
 
-// 窗口预算按 session 数均分：总预算 32、单 session 上限 8、最少 2 窗（sampleWindows 防除零下限）。
+// 窗口预算按 session 数均分：总预算 48、单 session 上限 8、最少 2 窗（sampleWindows 防除零下限）。
 func TestCollectConversationWindowsBudget(t *testing.T) {
-	conv := strings.Repeat("用户要求整理日报模板，助手读取文件并修改代码。", 100) // 2200 runes > 700
+	conv := strings.Repeat("用户要求整理日报模板，助手读取文件并修改代码。", 100) // 2200 runes > 1000
 	mk := func(n int) []UserPromptSnippet {
 		snaps := make([]UserPromptSnippet, 0, n)
 		for i := 0; i < n; i++ {
@@ -109,16 +109,16 @@ func TestCollectConversationWindowsBudget(t *testing.T) {
 		return snaps
 	}
 
-	if got := len(collectConversationWindows(mk(8))); got != 32 { // 32/8 = 4 窗/session
-		t.Fatalf("8 sessions: %d windows, want 32", got)
+	if got := len(collectConversationWindows(mk(8))); got != 48 { // 48/8 = 6 窗/session
+		t.Fatalf("8 sessions: %d windows, want 48", got)
 	}
-	if got := len(collectConversationWindows(mk(2))); got != 16 { // 32/2=16 → 封顶 8 窗/session
+	if got := len(collectConversationWindows(mk(2))); got != 16 { // 48/2=24 → 封顶 8 窗/session
 		t.Fatalf("2 sessions: %d windows, want 16", got)
 	}
 	if got := len(collectConversationWindows(mk(1))); got != 8 { // 封顶 8
 		t.Fatalf("1 session: %d windows, want 8", got)
 	}
-	if got := len(collectConversationWindows(mk(40))); got != 80 { // 32/40=0 → 保底；sampleWindows 最少 2 窗（防除零）
+	if got := len(collectConversationWindows(mk(40))); got != 80 { // 48/40=1 → 保底；sampleWindows 最少 2 窗（防除零）
 		t.Fatalf("40 sessions: %d windows, want 80", got)
 	}
 	if got := collectConversationWindows(nil); got != nil {

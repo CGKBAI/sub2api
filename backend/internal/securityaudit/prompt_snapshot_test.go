@@ -66,10 +66,21 @@ func TestSnapshotFullPromptKeepsUnredactedText(t *testing.T) {
 
 func TestBuildFullPromptStripsNULAndTruncates(t *testing.T) {
 	require.Equal(t, "abcd", BuildFullPrompt("ab\x00cd", 0))
-	long := strings.Repeat("长", DefaultFullPromptMaxRunes+10)
+
+	// 超长时保「头 + 尾」：头部是最新用户消息，尾部是最近上下文，中间省略。
+	head := strings.Repeat("头", 100)
+	tail := strings.Repeat("尾", 100)
+	long := head + strings.Repeat("中", DefaultFullPromptMaxRunes+10) + tail
 	trimmed := BuildFullPrompt(long, DefaultFullPromptMaxRunes)
-	require.Equal(t, DefaultFullPromptMaxRunes+1, utf8.RuneCountInString(trimmed))
-	require.True(t, strings.HasSuffix(trimmed, "…"))
+	require.LessOrEqual(t, utf8.RuneCountInString(trimmed), DefaultFullPromptMaxRunes)
+	require.True(t, strings.HasPrefix(trimmed, strings.Repeat("头", 100)), "head must be preserved")
+	require.True(t, strings.HasSuffix(trimmed, strings.Repeat("尾", 100)), "tail must be preserved")
+	require.Contains(t, trimmed, "此处省略")
+
+	// 头部占比过大 / limit 过小时退化为只保头部。
+	degenerate := TrimRunesHeadTail(strings.Repeat("x", 100), 10, 50)
+	require.Equal(t, strings.Repeat("x", 10)+"…", degenerate)
+	require.Equal(t, "短文本", TrimRunesHeadTail("短文本", 100, 8))
 }
 
 func TestFullPromptFromScanTextRestoresMultiSegmentLayout(t *testing.T) {

@@ -239,6 +239,39 @@ func TestMaybeAutoPushFeishuHonoursOptInAndTypeSwitches(t *testing.T) {
 	}
 }
 
+// TestMaybeAutoPushFeishuSkipsAlreadyPushedReport 验证推送幂等：同周期报告此前
+// 已推送成功（pushed_at 非空）时，定时路径不再重复刷群（Redis 标记丢失、leader
+// 切换、节假日模式切换都会导致同周期再生成一次）。
+func TestMaybeAutoPushFeishuSkipsAlreadyPushedReport(t *testing.T) {
+	var calls int32
+	srv := newFeishuTestServer(t, 0, &calls, nil)
+	groupRepo := &fakeReportGroupRepo{groups: []ReportFeishuGroup{
+		{ID: 1, Name: "计算群", WebhookURL: srv.URL, Enabled: true},
+	}}
+	reportRepo := &fakePushReportRepo{optIn: true}
+	svc := newTestService(reportRepo, groupRepo)
+	pushedAt := time.Date(2026, 11, 23, 19, 0, 0, 0, time.Local)
+	report := &Report{
+		ID:       103,
+		UserID:   7,
+		Type:     domain.ReportTypeDaily,
+		Status:   domain.ReportStatusDone,
+		PushedAt: &pushedAt,
+	}
+
+	svc.maybeAutoPushFeishu(context.Background(), &ReportLLMConfig{FeishuEnabled: true, FeishuPushDaily: true}, report)
+
+	if atomic.LoadInt32(&calls) != 0 {
+		t.Fatalf("webhook calls = %d, want 0 (already pushed)", calls)
+	}
+	if atomic.LoadInt32(&groupRepo.calls) != 0 {
+		t.Fatalf("group lookup calls = %d, want 0", groupRepo.calls)
+	}
+	if reportRepo.markCalls != 0 {
+		t.Fatalf("markPushResult called %d times, want 0", reportRepo.markCalls)
+	}
+}
+
 func TestTestFeishuGroupSendsTestCard(t *testing.T) {
 	var bodies []string
 	var calls int32

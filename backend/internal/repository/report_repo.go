@@ -34,6 +34,7 @@ func (r *reportRepository) Create(ctx context.Context, rp *service.Report) error
 		SetAiSummary(rp.AISummary).
 		SetStatus(rp.Status).
 		SetError(rp.Error).
+		SetQualityWarnings(rp.QualityWarnings).
 		Save(ctx)
 	if err != nil {
 		return err
@@ -53,6 +54,7 @@ func (r *reportRepository) Update(ctx context.Context, rp *service.Report) error
 		SetAiSummary(rp.AISummary).
 		SetStatus(rp.Status).
 		SetError(rp.Error).
+		SetQualityWarnings(rp.QualityWarnings).
 		Save(ctx)
 	if err != nil {
 		return translatePersistenceError(err, domain.ErrReportNotFound, nil)
@@ -478,6 +480,7 @@ func applyReportEntityToService(dst *service.Report, src *dbent.Report) {
 	dst.Error = src.Error
 	dst.PushedAt = src.PushedAt
 	dst.LastPushError = src.LastPushError
+	dst.QualityWarnings = src.QualityWarnings
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
 }
@@ -487,19 +490,20 @@ func reportEntityToService(m *dbent.Report) *service.Report {
 		return nil
 	}
 	return &service.Report{
-		ID:          m.ID,
-		UserID:      m.UserID,
-		Type:        m.Type,
-		PeriodStart: m.PeriodStart,
-		PeriodEnd:   m.PeriodEnd,
-		Stats:       m.Stats,
-		AISummary:   m.AiSummary,
-		Status:      m.Status,
-		Error:       m.Error,
-		PushedAt:    m.PushedAt,
-		LastPushError: m.LastPushError,
-		CreatedAt:   m.CreatedAt,
-		UpdatedAt:   m.UpdatedAt,
+		ID:              m.ID,
+		UserID:          m.UserID,
+		Type:            m.Type,
+		PeriodStart:     m.PeriodStart,
+		PeriodEnd:       m.PeriodEnd,
+		Stats:           m.Stats,
+		AISummary:       m.AiSummary,
+		Status:          m.Status,
+		Error:           m.Error,
+		PushedAt:        m.PushedAt,
+		LastPushError:   m.LastPushError,
+		QualityWarnings: m.QualityWarnings,
+		CreatedAt:       m.CreatedAt,
+		UpdatedAt:       m.UpdatedAt,
 	}
 }
 

@@ -67,6 +67,10 @@ func (Report) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "text"}).
 			Default("").
 			Comment("最近一次飞书推送失败原因（成功时清空）"),
+		field.String("quality_warnings").
+			SchemaType(map[string]string{dialect.Postgres: "text"}).
+			Default("").
+			Comment("生成后质量校验遗留问题（多条用；分隔，空串=通过）"),
 		field.Time("created_at").
 			Immutable().
 			Default(time.Now).

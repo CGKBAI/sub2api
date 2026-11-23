@@ -99,6 +99,11 @@ func LastPushError(v string) predicate.Report {
 	return predicate.Report(sql.FieldEQ(FieldLastPushError, v))
 }
 
+// QualityWarnings applies equality check predicate on the "quality_warnings" field. It's identical to QualityWarningsEQ.
+func QualityWarnings(v string) predicate.Report {
+	return predicate.Report(sql.FieldEQ(FieldQualityWarnings, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.Report {
 	return predicate.Report(sql.FieldEQ(FieldCreatedAt, v))
@@ -602,6 +607,71 @@ func LastPushErrorEqualFold(v string) predicate.Report {
 // LastPushErrorContainsFold applies the ContainsFold predicate on the "last_push_error" field.
 func LastPushErrorContainsFold(v string) predicate.Report {
 	return predicate.Report(sql.FieldContainsFold(FieldLastPushError, v))
+}
+
+// QualityWarningsEQ applies the EQ predicate on the "quality_warnings" field.
+func QualityWarningsEQ(v string) predicate.Report {
+	return predicate.Report(sql.FieldEQ(FieldQualityWarnings, v))
+}
+
+// QualityWarningsNEQ applies the NEQ predicate on the "quality_warnings" field.
+func QualityWarningsNEQ(v string) predicate.Report {
+	return predicate.Report(sql.FieldNEQ(FieldQualityWarnings, v))
+}
+
+// QualityWarningsIn applies the In predicate on the "quality_warnings" field.
+func QualityWarningsIn(vs ...string) predicate.Report {
+	return predicate.Report(sql.FieldIn(FieldQualityWarnings, vs...))
+}
+
+// QualityWarningsNotIn applies the NotIn predicate on the "quality_warnings" field.
+func QualityWarningsNotIn(vs ...string) predicate.Report {
+	return predicate.Report(sql.FieldNotIn(FieldQualityWarnings, vs...))
+}
+
+// QualityWarningsGT applies the GT predicate on the "quality_warnings" field.
+func QualityWarningsGT(v string) predicate.Report {
+	return predicate.Report(sql.FieldGT(FieldQualityWarnings, v))
+}
+
+// QualityWarningsGTE applies the GTE predicate on the "quality_warnings" field.
+func QualityWarningsGTE(v string) predicate.Report {
+	return predicate.Report(sql.FieldGTE(FieldQualityWarnings, v))
+}
+
+// QualityWarningsLT applies the LT predicate on the "quality_warnings" field.
+func QualityWarningsLT(v string) predicate.Report {
+	return predicate.Report(sql.FieldLT(FieldQualityWarnings, v))
+}
+
+// QualityWarningsLTE applies the LTE predicate on the "quality_warnings" field.
+func QualityWarningsLTE(v string) predicate.Report {
+	return predicate.Report(sql.FieldLTE(FieldQualityWarnings, v))
+}
+
+// QualityWarningsContains applies the Contains predicate on the "quality_warnings" field.
+func QualityWarningsContains(v string) predicate.Report {
+	return predicate.Report(sql.FieldContains(FieldQualityWarnings, v))
+}
+
+// QualityWarningsHasPrefix applies the HasPrefix predicate on the "quality_warnings" field.
+func QualityWarningsHasPrefix(v string) predicate.Report {
+	return predicate.Report(sql.FieldHasPrefix(FieldQualityWarnings, v))
+}
+
+// QualityWarningsHasSuffix applies the HasSuffix predicate on the "quality_warnings" field.
+func QualityWarningsHasSuffix(v string) predicate.Report {
+	return predicate.Report(sql.FieldHasSuffix(FieldQualityWarnings, v))
+}
+
+// QualityWarningsEqualFold applies the EqualFold predicate on the "quality_warnings" field.
+func QualityWarningsEqualFold(v string) predicate.Report {
+	return predicate.Report(sql.FieldEqualFold(FieldQualityWarnings, v))
+}
+
+// QualityWarningsContainsFold applies the ContainsFold predicate on the "quality_warnings" field.
+func QualityWarningsContainsFold(v string) predicate.Report {
+	return predicate.Report(sql.FieldContainsFold(FieldQualityWarnings, v))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

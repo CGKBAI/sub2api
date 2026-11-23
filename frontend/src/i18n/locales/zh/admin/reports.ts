@@ -45,7 +45,8 @@ export default {
       pushed: '已推送',
       pushFailed: '推送失败',
       pushSuccessCount: '已推送 {ok}/{total} 群',
-      pushPartial: '部分失败 {ok}/{total} 群'
+      pushPartial: '部分失败 {ok}/{total} 群',
+      qualityWarn: '⚠️ 质量提示'
     },
     goal: {
       title: '近期目标',

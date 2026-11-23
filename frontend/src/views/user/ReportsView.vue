@@ -318,6 +318,13 @@ const modelEntries = (report: Report) =>
             >
               {{ t('admin.reports.push.pushFailed') }}
             </span>
+            <span
+              v-if="report.quality_warnings"
+              class="badge badge-warning"
+              :title="report.quality_warnings"
+            >
+              {{ t('admin.reports.push.qualityWarn') }}
+            </span>
             <span class="ml-auto text-xs text-gray-500 dark:text-gray-400">
               {{ periodLabel(report) }}
             </span>

@@ -1812,12 +1812,16 @@ func init() {
 	reportDescLastPushError := reportFields[9].Descriptor()
 	// report.DefaultLastPushError holds the default value on creation for the last_push_error field.
 	report.DefaultLastPushError = reportDescLastPushError.Default.(string)
+	// reportDescQualityWarnings is the schema descriptor for quality_warnings field.
+	reportDescQualityWarnings := reportFields[10].Descriptor()
+	// report.DefaultQualityWarnings holds the default value on creation for the quality_warnings field.
+	report.DefaultQualityWarnings = reportDescQualityWarnings.Default.(string)
 	// reportDescCreatedAt is the schema descriptor for created_at field.
-	reportDescCreatedAt := reportFields[10].Descriptor()
+	reportDescCreatedAt := reportFields[11].Descriptor()
 	// report.DefaultCreatedAt holds the default value on creation for the created_at field.
 	report.DefaultCreatedAt = reportDescCreatedAt.Default.(func() time.Time)
 	// reportDescUpdatedAt is the schema descriptor for updated_at field.
-	reportDescUpdatedAt := reportFields[11].Descriptor()
+	reportDescUpdatedAt := reportFields[12].Descriptor()
 	// report.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	report.DefaultUpdatedAt = reportDescUpdatedAt.Default.(func() time.Time)
 	// report.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

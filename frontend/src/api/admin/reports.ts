@@ -42,6 +42,7 @@ export interface Report {
   error?: string
   pushed_at?: string
   last_push_error?: string
+  quality_warnings?: string
   push_deliveries?: ReportPushDelivery[]
   created_at: string
   updated_at: string

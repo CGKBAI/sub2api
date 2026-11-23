@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -79,6 +80,19 @@ const DefaultPromptPreviewMaxRunes = 96
 // on an audit event for admin review. It is deliberately generous so realistic
 // prompts are kept intact while bounding per-row storage.
 const DefaultFullPromptMaxRunes = 65536
+
+// fullPromptHeadRunes 是超长 prompt 截断时优先保留的头部长度。
+//
+// 拍平后的 full_prompt 结构为「该次请求最新一条用户消息 + 其余上下文（system /
+// 历史，保持原顺序）」且段间无角色标记，读取侧无法重建轮次，因此保哪两段只能在
+// 写入侧决定：
+//   - 头部 = 最新用户消息（这一轮的任务是什么），必须完整保留；
+//   - 尾部 = 会话末尾（最近在改什么），对日报最有价值；
+//   - 被省略的是历史中段（中间过程），信息密度最低。
+//
+// 旧实现只保头部（runes[:limit]），超长会话会丢掉整段"最近的工作"，日报素材
+// 退化成会话开头的内容。
+const fullPromptHeadRunes = 8192
 
 func extractProtocolSegments(protocol string, document any) []promptSegment {
 	root, _ := document.(map[string]any)
@@ -693,12 +707,36 @@ func BuildPromptPreview(value string, maxRunes int) string {
 // BuildFullPrompt returns the complete prompt text for audit-event storage and
 // admin review, without redaction. NUL bytes are stripped because PostgreSQL
 // TEXT rejects them, and the result is capped at maxRunes.
+//
+// 超过 maxRunes 时改为「头 + 尾」保留（见 fullPromptHeadRunes）：头部是该次请求
+// 的最新用户消息，尾部是会话最近的内容，中间历史以省略标记衔接。输出长度仍
+// 不超过 maxRunes，保证单行存储有界。
 func BuildFullPrompt(value string, maxRunes int) string {
 	if maxRunes <= 0 {
 		maxRunes = DefaultFullPromptMaxRunes
 	}
 	value = strings.ReplaceAll(value, "\x00", "")
-	return TrimRunes(strings.TrimSpace(value), maxRunes)
+	return TrimRunesHeadTail(strings.TrimSpace(value), maxRunes, fullPromptHeadRunes)
+}
+
+// TrimRunesHeadTail 截断到 limit rune：保留头部 head 与尾部 (limit-head-标记长度)，
+// 中间替换为省略标记。总长度不超过 limit（含标记），便于保持存储上界不变。
+// limit 过小或头部占比过大时退化为只保头部。
+func TrimRunesHeadTail(value string, limit, head int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	omitted := len(runes) - limit
+	marker := []rune(fmt.Sprintf("\n\n……（此处省略 %d 字）……\n\n", omitted))
+	if head <= 0 || head >= limit || len(marker) >= limit-head {
+		return string(runes[:limit]) + "…"
+	}
+	tail := limit - head - len(marker)
+	return string(runes[:head]) + string(marker) + string(runes[len(runes)-tail:])
 }
 
 // FullPromptFromScanText reconstructs the display prompt from the worker scan

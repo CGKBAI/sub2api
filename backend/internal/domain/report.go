@@ -23,6 +23,9 @@ var (
 	ErrReportInvalidPeriod    = infraerrors.BadRequest("REPORT_PERIOD_INVALID", "report period is invalid")
 	ErrReportLLMNotConfigured = infraerrors.BadRequest("REPORT_LLM_NOT_CONFIGURED", "report LLM is not configured")
 	ErrReportLLMCallFailed    = infraerrors.BadRequest("REPORT_LLM_CALL_FAILED", "report LLM call failed")
+	// ErrReportSensitiveContent 生成正文含敏感信息（密钥/token/邮箱/手机号/哈希），
+	// 重写后仍命中时整篇判失败：既不落库也不推送。
+	ErrReportSensitiveContent = infraerrors.BadRequest("REPORT_SENSITIVE_CONTENT", "generated report contains sensitive information")
 
 	ErrReportFeishuNotConfigured = infraerrors.BadRequest("REPORT_FEISHU_NOT_CONFIGURED", "feishu push is not configured")
 	ErrReportFeishuPushFailed    = infraerrors.BadRequest("REPORT_FEISHU_PUSH_FAILED", "feishu push failed")
@@ -95,6 +98,9 @@ type Report struct {
 	// PushedAt 最近一次飞书推送成功时间（nil = 从未推成功）；LastPushError 最近一次推送失败原因
 	PushedAt      *time.Time
 	LastPushError string
+	// QualityWarnings 生成后质量校验的遗留问题（多条用「；」分隔，空串=通过）。
+	// 硬违规重写一次后仍存在时正文照发并在此记录，前端显示 ⚠️。
+	QualityWarnings string
 	// PushDeliveries 报告×群组最近一次投递结果（列表/详情展示用，由服务层批量补齐）
 	PushDeliveries []ReportPushDelivery
 	CreatedAt      time.Time

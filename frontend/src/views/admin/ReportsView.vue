@@ -631,6 +631,13 @@ const statusBadge = computed(() => (status: string) => {
                 >
                   {{ t('admin.reports.push.pushFailed') }}
                 </span>
+                <span
+                  v-if="report.quality_warnings"
+                  class="badge badge-warning"
+                  :title="report.quality_warnings"
+                >
+                  {{ t('admin.reports.push.qualityWarn') }}
+                </span>
               </div>
               <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
                 {{ periodLabel(report) }}

@@ -21,6 +21,8 @@ type Report struct {
 	// PushedAt 最近一次飞书推送成功时间；LastPushError 最近一次推送失败原因
 	PushedAt      *time.Time `json:"pushed_at,omitempty"`
 	LastPushError string     `json:"last_push_error,omitempty"`
+	// QualityWarnings 生成后质量校验遗留问题（空串=通过；前端显示 ⚠️）
+	QualityWarnings string `json:"quality_warnings,omitempty"`
 	// PushDeliveries 报告×群组最近一次投递结果（多群推送）
 	PushDeliveries []ReportPushDelivery `json:"push_deliveries,omitempty"`
 	CreatedAt      time.Time            `json:"created_at"`
@@ -43,21 +45,22 @@ func ReportFromService(r *service.Report) *Report {
 		return nil
 	}
 	return &Report{
-		ID:             r.ID,
-		UserID:         r.UserID,
-		Username:       r.Username,
-		Type:           r.Type,
-		PeriodStart:    r.PeriodStart,
-		PeriodEnd:      r.PeriodEnd,
-		Stats:          r.Stats,
-		AISummary:      r.AISummary,
-		Status:         r.Status,
-		Error:          r.Error,
-		PushedAt:       r.PushedAt,
-		LastPushError:  r.LastPushError,
-		PushDeliveries: reportDeliveriesFromService(r.PushDeliveries),
-		CreatedAt:      r.CreatedAt,
-		UpdatedAt:      r.UpdatedAt,
+		ID:              r.ID,
+		UserID:          r.UserID,
+		Username:        r.Username,
+		Type:            r.Type,
+		PeriodStart:     r.PeriodStart,
+		PeriodEnd:       r.PeriodEnd,
+		Stats:           r.Stats,
+		AISummary:       r.AISummary,
+		Status:          r.Status,
+		Error:           r.Error,
+		PushedAt:        r.PushedAt,
+		LastPushError:   r.LastPushError,
+		QualityWarnings: r.QualityWarnings,
+		PushDeliveries:  reportDeliveriesFromService(r.PushDeliveries),
+		CreatedAt:       r.CreatedAt,
+		UpdatedAt:       r.UpdatedAt,
 	}
 }
 

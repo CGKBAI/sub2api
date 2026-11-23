@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-11-19（**v4.1 飞书多群推送已上线生产 stable 33333**：报告按用户所属群组投递，一人可属于多个部门群；迁移 249 新增群组/成员/投递记录三表，原全局 webhook 自动迁移为「计算群」，见 §8 v4.1）。
+> 本文档是完整项目上下文。最后更新：2026-11-23（**v4.2 报告素材与质量闭环已实现，待 dev 验证/发布**：审计截断改头 8k+尾 56k、窗口尾部优先采样、生成后质量校验（不合格照发+⚠️）、推送幂等，见 §8 v4.2；生产仍为 v4.1 stable）。
 
 ## 1. 功能与当前状态总览
 
@@ -11,12 +11,13 @@
 3. ✅ **已上线生产**（33333，`sub2api:stable`）
 4. ✅ **月报类型**（2026-09-16）：迁移 233 放宽 CHECK；月报固定覆盖 ref 的**上一个自然月**（每月 1 日 20:20 生成上月，手动生成语义一致）——v3 将反转为 ref 所在自然月，见 §8；聚合优先级：当月周报 → 当月日报 → prompt 片段
 5. ✅ **LLM 总结 prompt 重写 ×2**（2026-09-16）：最终格式对齐团队模板——**标题由后端拼**（`reportTitle()`，姓名取 users.username，如 `# 工作日报（2026-09-15）- 谢翔宇`），LLM 只输出两个小节（`## 一、今日/本周/本月核心工作` + `## 二、明日/下周/下月工作计划`，平铺编号条目，无分类/优先级标注）；素材规则保留噪音过滤/合并同类/量化/脱敏；`ReportRepository.GetUsername()` 新增
-6. ✅ **报告素材双通道**（2026-09-16 晚）：①`FetchUserTurns` 逐请求头部提取用户真实输入（剥 <system-reminder> 前缀+噪音过滤+去重）——普通聊天/Claude Code 客户端有效；②`FetchPromptSnapshots`+对话区窗口采样（锚点 `</available_skills>` 后，每 session 最全快照×均分窗口×700 字）——opencode 等智能体客户端用户输入埋在历史深处、且 reminder 字符串会出现在系统提示词讲解和文件内容里导致正则剥离不可靠，只能靠窗口采样。system prompt 含 ❌/✅ 反例（禁止'用了什么工具/模式/多少请求'类条目）。验证：谢翔宇 9/16 预览输出已为真实工作条目。**已知限制**：单 session 超 64k 时审计截断丢最新几轮（仅保头部，opencode 客户端压缩可部分缓解）；快照均匀选取未按 session 分组的限制已由 v2 解决（见第 8 项）
+6. ✅ **报告素材双通道**（2026-09-16 晚）：①`FetchUserTurns` 逐请求头部提取用户真实输入（剥 <system-reminder> 前缀+噪音过滤+去重）——普通聊天/Claude Code 客户端有效；②`FetchPromptSnapshots`+对话区窗口采样（锚点 `</available_skills>` 后，每 session 最全快照×均分窗口×700 字）——opencode 等智能体客户端用户输入埋在历史深处、且 reminder 字符串会出现在系统提示词讲解和文件内容里导致正则剥离不可靠，只能靠窗口采样。system prompt 含 ❌/✅ 反例（禁止'用了什么工具/模式/多少请求'类条目）。验证：谢翔宇 9/16 预览输出已为真实工作条目。**已知限制**：单 session 超 64k 时审计截断丢最新几轮（仅保头部，opencode 客户端压缩可部分缓解）——**v4.2 已修**：截断改头 8k+尾 56k，窗口改 1000 字且尾部优先采样（见 §8 v4.2）；快照均匀选取未按 session 分组的限制已由 v2 解决（见第 8 项）
 7. ✅ **审计表 session 维度**（2026-09-16 晚）：迁移 234 给 prompt_audit_jobs/events 加 session_id（取自请求头 `ExtractClientSessionID` 单一入口），部分索引 (user_id, session_id, created_at)；Request→job→event 全链路穿透。注意：session_id 与 usage_logs 同源（客户端上报），历史数据为空
 8. ✅ **报告链路 v2+v3**（2026-09-16/17，v3 已上线 stable）：①日报素材按 session 分组总结（`FetchPromptSnapshots`，session_id 自 9/16 17:54 起入库）——上线保留；②周报周期=**正常周一~周日**（v2 的周六周期已回滚，`StartOfWeekSaturday` 已删除），周五 20:10 定时生成覆盖周一~周五、周末工作后续手动重生成补入；③月报=**ref 所在自然月**（前端选 8 月出 8 月；调度器 1 日传上月 1 日生成上月）；④前端周报按周下拉选（近 12 周）、月报按月选（admin/user 双视图）；⑤**手动生成永不自动推飞书**（v3.1，`ReportTrigger` manual/scheduled），定时生成按类型开关+用户参与开关自动推；⑥月报聚合与当月有交集的周报（pageSize 8）
 9. ✅ **飞书推送**（2026-09-17 已上线生产）：群自定义机器人 Webhook + interactive 卡片；生成成功自动推（类型开关+用户开关）+ 手动按钮（本人/admin）；commit 7c3f80740，见 §10
 10. ✅ **DeepSeek Search/Fetch**（2026-11-03 已上线生产）：`POST /v1/tools/search`、`POST /v1/tools/fetch`，仅原生 DeepSeek 分组（Composite 等一律 404）；复用调度器只选 DeepSeek API Key 账号；请求/成功响应原样转发；200 且有 results/content 才按次计费（默认 0.005，可覆盖/免费/倍率），Search query 走提示词审计，见 §8 v4.0
 11. ✅ **飞书多群推送**（2026-11-19 已上线生产）：新增 `report_feishu_groups` / `report_feishu_group_members` / `report_feishu_deliveries` 三表；定时与手动推送都按报告作者所属的**所有启用群组**投递（同一 webhook 去重），单群失败不影响其他群；原全局 webhook 自动迁移为「计算群」，仅当时 `report_push_enabled=true` 的 13 个用户入组；管理员在报告页「报告群组」tab 维护群与成员，见 §8 v4.1
+12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 代码完成，待 dev 验证/发布）：①审计截断改「头 8k + 尾 56k」，不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；④推送幂等：已推送过的周期不再自动重复推。见 §8 v4.2
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -129,7 +130,7 @@ docker compose up -d sub2api
 ## 5. Prompt 存储事实（已核实）
 
 - 表：`prompt_audit_events`（主）+ `prompt_audit_jobs`（队列），无自动清理，永久保留
-- **格式**：`full_prompt` = 拍平纯文本（非 JSON）= [最后一条用户消息原文] + \n\n + [其余上下文（system/历史）]，段间无角色标记；截断 65536 runes（超长加 `…`）
+- **格式**：`full_prompt` = 拍平纯文本（非 JSON）= [最后一条用户消息原文] + \n\n + [其余上下文（system/历史）]，段间无角色标记；超 65536 runes 时按 **头 8192 + 尾（约 57k）+ 中间省略标记** 截断（v4.2 起；拍平文本无角色标记，读取侧无法重建轮次，只能在写入侧决定保哪两段——头部=本轮任务、尾部=最近上下文、中段历史信息密度最低）
 - `redacted_preview` = 前 28 字符脱敏预览；`prompt_hash` = SHA256
 - 元数据：user_id/user_email_snapshot/api_key_name_snapshot/model/provider/endpoint/created_at 等，`(user_id, created_at DESC)` 索引现成
 - 扫描失败的事件：decision=pass + `scanner_version="scan_failed:<code>"`（降级标记，可 SQL 过滤；v3.5 起仅在重试耗尽/不可重试后降级，且前面 chunk 已成功的真实发现会聚合保留）
@@ -161,6 +162,10 @@ docker compose up -d sub2api
 **飞书多群推送（v4.1，2026-11-19）**：
 - 新增：`migrations/249_report_feishu_groups.sql`、`service/report_feishu_group.go`（+`_test.go`）、`repository/report_group_repo.go`、`handler/dto/report_group.go`
 - 修改挂载点：`domain/report.go`（群组/投递类型 + 迁移错误）、`service/report.go`（ReportGroupRepository）、`service/report_service.go`（构造器注入 groupRepo、多群推送、列表补齐投递）、`service/report_feishu.go`（PushTestCard/pushCard 抽取）、`handler/admin/report_handler.go`（群组 CRUD/成员/测试接口、config 保存忽略脱敏占位符）、`handler/dto/report.go`、`server/routes/admin.go`、`repository/wire.go`、`service/wire.go`
+
+**报告素材与质量闭环（v4.2，2026-11-23，未发布）**：
+- 新增：`migrations/250_report_quality_warnings.sql`（reports.quality_warnings，纯增量）、`service/report_quality.go`（+`_test.go`）、`service/report_material_test.go`
+- 修改：`securityaudit/prompt_snapshot.go`（`BuildFullPrompt` 改头尾截断 + 新 `TrimRunesHeadTail`）、`service/report_service.go`（`buildSummary` 拆为 `buildSummaryPrompt` + `completeCheckedReport`、窗口采样重写、总量预算、推送幂等）、`domain/report.go`（QualityWarnings + ErrReportSensitiveContent）、`ent/schema/report.go`（quality_warnings，含 ent 生成物）、`repository/report_repo.go`、`handler/dto/report.go`、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（⚠️ 质量提示徽标）、i18n zh/en `push.qualityWarn`
 
 **修改官方文件（挂载点）**：`config.go`（ReportConfig）、`handler.go|handler/wire.go`、`service/wire.go`、`repository/wire.go`、`routes/admin.go|user.go`、`cmd/server/wire.go`（cleanup）、`domain_constants.go`（SettingKeyReportConfig）、router/index.ts、AppSidebar.vue（ReportIcon）、i18n common.ts nav + admin/index.ts ×2、go.mod/go.sum（wire cmd indirect）
 
@@ -331,11 +336,27 @@ docker compose up -d sub2api
 - 测试：新增 service 多群路由单测（去重、部分失败隔离、无群组、opt-in/类型开关、测试卡片、创建校验）；go build/vet + service/repository/handler/routes 全绿；vue-tsc EXIT=0；dev 33336 迁移后核对「计算群」13 人、投递表为空；stable 33333 发布 healthy、HTTP 200、前端 chunk 含新逻辑
 - 发布顺序：dev 启动先在共享库跑迁移 → 验证 → 备份 `sub2api:stable-backup-20261119-1459` → `sub2api:dev` 打 stable → 重建生产；旧 settings webhook 保留，可回滚
 
+### v4.2：报告素材与质量闭环（2026-11-23 代码完成，待 dev 验证/发布）
+
+> 背景：对照 §8 审查遗留，修四类 P0 缺陷。它们共同决定"报告内容对不对"——素材进不来正确的东西、垃圾条目没人拦、同周期还会重复刷群。
+> 决策（用户确认）：①截断配额取 **头 8k + 尾 56k**；②质量不合格时**照发 + ⚠️ 标记**（不扣住，漏报比质量差更伤信任），敏感信息例外。
+
+- [x] **1. 审计截断改头尾保留**（`securityaudit/prompt_snapshot.go`）：新增 `TrimRunesHeadTail`，`BuildFullPrompt` 超 65536 runes 时保 **头 8192（本轮用户消息）+ 尾 ≈57k（最近上下文）**，中间插 `……（此处省略 N 字）……` 标记，总长仍 ≤ limit（存储上界不变）。为什么只能在写入侧修：`full_prompt` 是段间无角色标记的拍平文本，读取侧无法重建轮次。**只影响新数据**，历史行不动
+- [x] **2. 对话窗口采样重写**（`service/report_service.go`）：`conversationWindowRunes` 700→1000、`conversationWindowBudget` 32→48（单日素材上限约 4.8 万字符）；`sampleWindows` 改为 ①**尾部优先**（后 30% 对话区分到一半窗口）②**段首对齐**（起点吸附到最近段落/代码块边界，最多 240 rune）③**跳过 ``` 围栏内窗口** ④锚点 `</available_skills>` 缺失且文本超长时先丢前 8192 rune；尾段容纳不下时预算回填前段，保证总窗口数稳定
+- [x] **3. 上下文总量预算**（`buildSummaryPrompt`）：新增 `reportUserPromptMaxRunes = 80000`，固定段（周期/目标/子报告/统计）优先，剩余额度在"提问记录"与"对话片段"间**交替从最早一条开始丢**；`max_prompts` 死配置接线（此前一直用硬编码 300），按"去重后最多注入多少条有效提问"生效、超出保留最近
+- [x] **4. 生成后质量校验**（新增 `service/report_quality.go`）：`checkReportQuality` 分三级——**硬违规**（小节结构缺失/多余第三节/禁语"次数·工具·模式"/敏感信息）、**软问题**（核心工作条目数、条目 >60 字、代码块/表格、空泛措辞，**仅记日志不打徽标**，避免多数正常报告都带 ⚠️）、**敏感**；硬违规把清单回灌**重写一次**，仍不通过则选更轻的一份**照发**并写 `quality_warnings`；敏感信息在两次输出中都出现时整篇判失败（`ErrReportSensitiveContent`，不落库不推送）。另加 `sanitizeReportBody` 自动剥掉 LLM 多输出的 H1 标题
+- [x] **5. 推送幂等**（`maybeAutoPushFeishu`）：`pushed_at` 非空即跳过自动推送并记日志。`persist` 的 Update 不触碰 `pushed_at`，所以重生成同周期报告时该字段仍是真实推送状态——Redis 标记丢失、leader 切换、节假日模式切换导致的"同周期再生成一次"不再重复刷群；补发/更新走卡片手动按钮（与 v3.1 语义一致）
+- [x] **6. 落库与前端**：迁移 250 加 `reports.quality_warnings`（纯增量）；domain/ent/DTO/仓储全链路；admin/user 报告卡片在推送徽标后新增 `badge-warning`「⚠️ 质量提示」徽标，悬浮显示具体问题；i18n zh/en `push.qualityWarn`
+- [x] 测试：新增 `report_quality_test.go`（结构调整/禁语/敏感/第三节目/软问题/标题剥离）、`report_material_test.go`（尾部优先/段首对齐/代码块/总量预算/max_prompts）、`TestMaybeAutoPushFeishuSkipsAlreadyPushedReport`、`TrimRunesHeadTail` 用例；`TestCollectConversationWindowsBudget` 按新预算更新
+- [x] 验证：`go build ./...` + `go vet`(service/repository/securityaudit/handler) 全绿；`go test` service/securityaudit/handler 全绿；`vue-tsc --noEmit` EXIT=0
+- [ ] **待办：dev 验证 + 发布**。迁移 250 在共享库执行是唯一有副作用的步骤（纯增量、旧镜像兼容），发布顺序同 §4.2（dev 冒烟 → 备份 stable tag → 打 stable → 重建生产）
+
 ### 后续迭代
 
 - [ ] **节假日表年度维护**：每年 11 月国办公布次年放假安排后，在 `backend/internal/pkg/holiday/holiday.go` init() 补表并走 §4 发布流程（2027 年表未内置前自动按「仅避开周末」回退，日志会 warn 一次）
 - [ ] 飞书推送优化（分群/自建应用/推送状态——推送状态已由 v3.5 落库，剩分群/自建应用/失败重试队列，见 §10 后续优化）
-- [ ] 代码审查中优遗留（2026-09-20 审查结论）：批量生成异步化（generate-all 30min 同步阻塞）、每用户 N+1 查询、persist 改 UPSERT、`MaxPrompts` 死配置接线、cron 保存校验、脱敏值回写覆盖风险、64k 头尾拼接保留最新轮次、`left(2000)` 截断丢未闭合 reminder、LLM 上下文总预算 cap、前端列表竞态/分页/admin-user 视图抽组件、prompt_audit_events 保留策略
+- [x] 2026-09-20 审查遗留中三项已于 v4.2 解决：`MaxPrompts` 死配置接线、64k 头尾拼接保留最新轮次、LLM 上下文总预算 cap
+- [ ] 代码审查中优遗留（2026-09-20 审查结论，v4.2 后的剩余项）：批量生成异步化（generate-all 30min 同步阻塞）、每用户 N+1 查询、persist 改 UPSERT、cron 保存校验、脱敏值回写覆盖风险、`left(2000)` 截断丢未闭合 reminder、前端列表竞态/分页/admin-user 视图抽组件、prompt_audit_events 保留策略、推送失败重试队列
 
 ### 已完成（归档）
 

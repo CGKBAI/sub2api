@@ -40126,26 +40126,27 @@ func (m *RedeemCodeMutation) ResetEdge(name string) error {
 // ReportMutation represents an operation that mutates the Report nodes in the graph.
 type ReportMutation struct {
 	config
-	op              Op
-	typ             string
-	id              *int64
-	user_id         *int64
-	adduser_id      *int64
-	_type           *string
-	period_start    *time.Time
-	period_end      *time.Time
-	stats           *domain.ReportStats
-	ai_summary      *string
-	status          *string
-	error           *string
-	pushed_at       *time.Time
-	last_push_error *string
-	created_at      *time.Time
-	updated_at      *time.Time
-	clearedFields   map[string]struct{}
-	done            bool
-	oldValue        func(context.Context) (*Report, error)
-	predicates      []predicate.Report
+	op               Op
+	typ              string
+	id               *int64
+	user_id          *int64
+	adduser_id       *int64
+	_type            *string
+	period_start     *time.Time
+	period_end       *time.Time
+	stats            *domain.ReportStats
+	ai_summary       *string
+	status           *string
+	error            *string
+	pushed_at        *time.Time
+	last_push_error  *string
+	quality_warnings *string
+	created_at       *time.Time
+	updated_at       *time.Time
+	clearedFields    map[string]struct{}
+	done             bool
+	oldValue         func(context.Context) (*Report, error)
+	predicates       []predicate.Report
 }
 
 var _ ent.Mutation = (*ReportMutation)(nil)
@@ -40639,6 +40640,42 @@ func (m *ReportMutation) ResetLastPushError() {
 	m.last_push_error = nil
 }
 
+// SetQualityWarnings sets the "quality_warnings" field.
+func (m *ReportMutation) SetQualityWarnings(s string) {
+	m.quality_warnings = &s
+}
+
+// QualityWarnings returns the value of the "quality_warnings" field in the mutation.
+func (m *ReportMutation) QualityWarnings() (r string, exists bool) {
+	v := m.quality_warnings
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQualityWarnings returns the old "quality_warnings" field's value of the Report entity.
+// If the Report object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ReportMutation) OldQualityWarnings(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQualityWarnings is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQualityWarnings requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQualityWarnings: %w", err)
+	}
+	return oldValue.QualityWarnings, nil
+}
+
+// ResetQualityWarnings resets all changes to the "quality_warnings" field.
+func (m *ReportMutation) ResetQualityWarnings() {
+	m.quality_warnings = nil
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *ReportMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -40745,7 +40782,7 @@ func (m *ReportMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ReportMutation) Fields() []string {
-	fields := make([]string, 0, 12)
+	fields := make([]string, 0, 13)
 	if m.user_id != nil {
 		fields = append(fields, report.FieldUserID)
 	}
@@ -40775,6 +40812,9 @@ func (m *ReportMutation) Fields() []string {
 	}
 	if m.last_push_error != nil {
 		fields = append(fields, report.FieldLastPushError)
+	}
+	if m.quality_warnings != nil {
+		fields = append(fields, report.FieldQualityWarnings)
 	}
 	if m.created_at != nil {
 		fields = append(fields, report.FieldCreatedAt)
@@ -40810,6 +40850,8 @@ func (m *ReportMutation) Field(name string) (ent.Value, bool) {
 		return m.PushedAt()
 	case report.FieldLastPushError:
 		return m.LastPushError()
+	case report.FieldQualityWarnings:
+		return m.QualityWarnings()
 	case report.FieldCreatedAt:
 		return m.CreatedAt()
 	case report.FieldUpdatedAt:
@@ -40843,6 +40885,8 @@ func (m *ReportMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldPushedAt(ctx)
 	case report.FieldLastPushError:
 		return m.OldLastPushError(ctx)
+	case report.FieldQualityWarnings:
+		return m.OldQualityWarnings(ctx)
 	case report.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case report.FieldUpdatedAt:
@@ -40925,6 +40969,13 @@ func (m *ReportMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetLastPushError(v)
+		return nil
+	case report.FieldQualityWarnings:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQualityWarnings(v)
 		return nil
 	case report.FieldCreatedAt:
 		v, ok := value.(time.Time)
@@ -41042,6 +41093,9 @@ func (m *ReportMutation) ResetField(name string) error {
 		return nil
 	case report.FieldLastPushError:
 		m.ResetLastPushError()
+		return nil
+	case report.FieldQualityWarnings:
+		m.ResetQualityWarnings()
 		return nil
 	case report.FieldCreatedAt:
 		m.ResetCreatedAt()
