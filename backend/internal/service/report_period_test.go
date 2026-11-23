@@ -127,8 +127,8 @@ func TestCollectConversationWindowsBudget(t *testing.T) {
 	if got := len(collectConversationWindows(mk(1))); got != 8 { // 封顶 8
 		t.Fatalf("1 session: %d windows, want 8", got)
 	}
-	if got := len(collectConversationWindows(mk(40))); got != 80 { // 48/40=1 → 保底；sampleWindows 最少 2 窗（防除零）
-		t.Fatalf("40 sessions: %d windows, want 80", got)
+	if got := len(collectConversationWindows(mk(40))); got != 48 { // 候选超预算，按噪音裁回 48（预算不再被突破）
+		t.Fatalf("40 sessions: %d windows, want 48", got)
 	}
 	if got := collectConversationWindows(nil); got != nil {
 		t.Fatalf("nil snaps: got %v, want nil", got)

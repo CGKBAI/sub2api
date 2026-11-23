@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-11-23（**v4.2 报告素材与质量闭环已实现，待 dev 验证/发布**：审计截断改头 8k+尾 56k、窗口尾部优先采样、生成后质量校验（不合格照发+⚠️）、推送幂等，见 §8 v4.2；生产仍为 v4.1 stable）。
+> 本文档是完整项目上下文。最后更新：2026-11-23（**v4.2 报告素材与质量闭环：dev 33336 已验证通过，待发布 stable**：审计落库改「按段分配预算」+ user_text 列、窗口尾部优先/段首对齐/降噪、每 session 双快照、生成后质量校验（不合格照发+⚠️）、推送幂等，见 §8 v4.2；生产仍为 v4.1 stable）。
 
 ## 1. 功能与当前状态总览
 
@@ -11,13 +11,13 @@
 3. ✅ **已上线生产**（33333，`sub2api:stable`）
 4. ✅ **月报类型**（2026-09-16）：迁移 233 放宽 CHECK；月报固定覆盖 ref 的**上一个自然月**（每月 1 日 20:20 生成上月，手动生成语义一致）——v3 将反转为 ref 所在自然月，见 §8；聚合优先级：当月周报 → 当月日报 → prompt 片段
 5. ✅ **LLM 总结 prompt 重写 ×2**（2026-09-16）：最终格式对齐团队模板——**标题由后端拼**（`reportTitle()`，姓名取 users.username，如 `# 工作日报（2026-09-15）- 谢翔宇`），LLM 只输出两个小节（`## 一、今日/本周/本月核心工作` + `## 二、明日/下周/下月工作计划`，平铺编号条目，无分类/优先级标注）；素材规则保留噪音过滤/合并同类/量化/脱敏；`ReportRepository.GetUsername()` 新增
-6. ✅ **报告素材双通道**（2026-09-16 晚）：①`FetchUserTurns` 逐请求头部提取用户真实输入（剥 <system-reminder> 前缀+噪音过滤+去重）——普通聊天/Claude Code 客户端有效；②`FetchPromptSnapshots`+对话区窗口采样（锚点 `</available_skills>` 后，每 session 最全快照×均分窗口×700 字）——opencode 等智能体客户端用户输入埋在历史深处、且 reminder 字符串会出现在系统提示词讲解和文件内容里导致正则剥离不可靠，只能靠窗口采样。system prompt 含 ❌/✅ 反例（禁止'用了什么工具/模式/多少请求'类条目）。验证：谢翔宇 9/16 预览输出已为真实工作条目。**已知限制**：单 session 超 64k 时审计截断丢最新几轮（仅保头部，opencode 客户端压缩可部分缓解）——**v4.2 已修**：截断改头 8k+尾 56k，窗口改 1000 字且尾部优先采样（见 §8 v4.2）；快照均匀选取未按 session 分组的限制已由 v2 解决（见第 8 项）
+6. ✅ **报告素材双通道**（2026-09-16 晚）：①`FetchUserTurns` 逐请求头部提取用户真实输入（剥 <system-reminder> 前缀+噪音过滤+去重）——普通聊天/Claude Code 客户端有效；②`FetchPromptSnapshots`+对话区窗口采样（锚点 `</available_skills>` 后，每 session 最全快照×均分窗口×700 字）——opencode 等智能体客户端用户输入埋在历史深处、且 reminder 字符串会出现在系统提示词讲解和文件内容里导致正则剥离不可靠，只能靠窗口采样。system prompt 含 ❌/✅ 反例（禁止'用了什么工具/模式/多少请求'类条目）。验证：谢翔宇 9/16 预览输出已为真实工作条目。**已知限制**：单 session 超 64k 时审计截断丢最新几轮（仅保头部，opencode 客户端压缩可部分缓解）——**v4.2 已修**：截断改「按段分配预算」（最新用户消息 16k + 尾部块）、窗口 1000 字且尾部优先并降噪、每 session 取两条快照（见 §8 v4.2）；快照均匀选取未按 session 分组的限制已由 v2 解决（见第 8 项）
 7. ✅ **审计表 session 维度**（2026-09-16 晚）：迁移 234 给 prompt_audit_jobs/events 加 session_id（取自请求头 `ExtractClientSessionID` 单一入口），部分索引 (user_id, session_id, created_at)；Request→job→event 全链路穿透。注意：session_id 与 usage_logs 同源（客户端上报），历史数据为空
 8. ✅ **报告链路 v2+v3**（2026-09-16/17，v3 已上线 stable）：①日报素材按 session 分组总结（`FetchPromptSnapshots`，session_id 自 9/16 17:54 起入库）——上线保留；②周报周期=**正常周一~周日**（v2 的周六周期已回滚，`StartOfWeekSaturday` 已删除），周五 20:10 定时生成覆盖周一~周五、周末工作后续手动重生成补入；③月报=**ref 所在自然月**（前端选 8 月出 8 月；调度器 1 日传上月 1 日生成上月）；④前端周报按周下拉选（近 12 周）、月报按月选（admin/user 双视图）；⑤**手动生成永不自动推飞书**（v3.1，`ReportTrigger` manual/scheduled），定时生成按类型开关+用户参与开关自动推；⑥月报聚合与当月有交集的周报（pageSize 8）
 9. ✅ **飞书推送**（2026-09-17 已上线生产）：群自定义机器人 Webhook + interactive 卡片；生成成功自动推（类型开关+用户开关）+ 手动按钮（本人/admin）；commit 7c3f80740，见 §10
 10. ✅ **DeepSeek Search/Fetch**（2026-11-03 已上线生产）：`POST /v1/tools/search`、`POST /v1/tools/fetch`，仅原生 DeepSeek 分组（Composite 等一律 404）；复用调度器只选 DeepSeek API Key 账号；请求/成功响应原样转发；200 且有 results/content 才按次计费（默认 0.005，可覆盖/免费/倍率），Search query 走提示词审计，见 §8 v4.0
 11. ✅ **飞书多群推送**（2026-11-19 已上线生产）：新增 `report_feishu_groups` / `report_feishu_group_members` / `report_feishu_deliveries` 三表；定时与手动推送都按报告作者所属的**所有启用群组**投递（同一 webhook 去重），单群失败不影响其他群；原全局 webhook 自动迁移为「计算群」，仅当时 `report_push_enabled=true` 的 13 个用户入组；管理员在报告页「报告群组」tab 维护群与成员，见 §8 v4.1
-12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 代码完成，待 dev 验证/发布）：①审计截断**按段分配预算**（最新用户消息 16k + 尾部块 + 1.5k 系统提示词，静态技能清单丢弃），不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③**每 session 取「最新 + 中段」两条快照**，补回被截断丢掉的中段；④生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；⑤推送幂等：已推送过的周期不再自动重复推；⑥新增 `user_text` 列，救回此前静默丢失的 8.1% 用户提问。见 §8 v4.2
+12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 dev 已验证，待发布）：①审计截断**按段分配预算**（最新用户消息 16k + 尾部块 + 1.5k 系统提示词，静态技能清单丢弃），不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③**每 session 取「最新 + 中段」两条快照**，补回被截断丢掉的中段；④生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；⑤推送幂等：已推送过的周期不再自动重复推；⑥新增 `user_text` 列，救回此前静默丢失的 8.1% 用户提问；⑦窗口降噪：按内容特征给窗口打分，先把预算让给干净窗口。见 §8 v4.2
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -130,7 +130,7 @@ docker compose up -d sub2api
 ## 5. Prompt 存储事实（已核实）
 
 - 表：`prompt_audit_events`（主）+ `prompt_audit_jobs`（队列），无自动清理，永久保留
-- **格式**：`full_prompt` = 拍平纯文本（非 JSON）= [最后一条用户消息原文] + \n\n + [其余上下文（system/历史）]，段间无角色标记；超 65536 runes 时**按段分配预算**（v4.2.1 起）：最新用户消息段精确保留 **16k**（超出截断并标注）、其余按空行切块**从尾部往前**取（每块 ≤2048、最多 24 块）、开头补 1536 字符系统提示词、`</available_skills>` 技能清单整块丢弃，被跳过处插「省略 N 段」标记。拍平文本无角色标记，读取侧无法重建轮次，所以保哪些段只能在写入侧决定
+- **格式**：`full_prompt` = 拍平纯文本（非 JSON）= [最后一条用户消息原文] + \n\n + [其余上下文（system/历史）]，段间无角色标记；超 65536 runes 时**按段分配预算**（v4.2.1 起）：最新用户消息段精确保留 **16k**（超出截断并标注）、其余按空行切块**从尾部往前**取（每块 ≤2048，只按预算停、不限块数）、开头补 1536 字符系统提示词、`</available_skills>` 技能清单整块丢弃，被跳过处插「省略 N 段」标记。拍平文本无角色标记，读取侧无法重建轮次，所以保哪些段只能在写入侧决定
 - `redacted_preview` = 前 28 字符脱敏预览；`prompt_hash` = SHA256
 - 元数据：user_id/user_email_snapshot/api_key_name_snapshot/model/provider/endpoint/created_at 等，`(user_id, created_at DESC)` 索引现成
 - **`user_text`（v4.2 起）**：写入时抽好的「最新一条用户消息」，已剥掉 `<system-reminder>` 注入块，≤4000 rune；报告侧「用户提问记录」优先读它，历史行回退 full_prompt 头部 2000 字
@@ -166,7 +166,7 @@ docker compose up -d sub2api
 
 **报告素材与质量闭环（v4.2，2026-11-23，未发布）**：
 - 新增：`migrations/250_report_quality_warnings.sql`（reports.quality_warnings，纯增量）、`migrations/251_prompt_audit_user_text.sql`（prompt_audit_events.user_text，纯增量）、`service/report_quality.go`（+`_test.go`）、`service/report_material_test.go`
-- 修改：`securityaudit/prompt_snapshot.go`（`buildFullPromptFromScanText` 按段分配预算 + `LatestUserTextFromScanText`）、`securityaudit/prompt_worker.go`（从 scanText 重算 FullPrompt/UserText）、`securityaudit/prompt_repository.go`（INSERT 增列）、`securityaudit/prompt_types.go`（PromptSnapshot.UserText）、`service/report_service.go`（`buildSummary` 拆为 `buildSummaryPrompt` + `completeCheckedReport`、窗口采样重写、总量预算、推送幂等）、`service/report.go`（UserPromptSnippet.CleanText）、`domain/report.go`（QualityWarnings + ErrReportSensitiveContent）、`ent/schema/report.go`（quality_warnings，含 ent 生成物）、`repository/report_repo.go`（user_text 读取 + 双快照）、`handler/dto/report.go`、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（⚠️ 质量提示徽标）、i18n zh/en `push.qualityWarn`
+- 修改：`securityaudit/prompt_snapshot.go`（`buildFullPromptFromScanText` 按段分配预算 + `LatestUserTextFromScanText`）、`securityaudit/prompt_worker.go`（从 scanText 重算 FullPrompt/UserText）、`securityaudit/prompt_repository.go`（INSERT 增列）、`securityaudit/prompt_types.go`（PromptSnapshot.UserText）、`service/report_service.go`（`buildSummary` 拆为 `buildSummaryPrompt` + `completeCheckedReport`、窗口采样重写 + 降噪打分、总量预算、推送幂等）、`service/report.go`（UserPromptSnippet.CleanText）、`domain/report.go`（QualityWarnings + ErrReportSensitiveContent）、`ent/schema/report.go`（quality_warnings，含 ent 生成物）、`repository/report_repo.go`（user_text 读取 + 双快照）、`handler/dto/report.go`、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（⚠️ 质量提示徽标）、i18n zh/en `push.qualityWarn`
 
 **修改官方文件（挂载点）**：`config.go`（ReportConfig）、`handler.go|handler/wire.go`、`service/wire.go`、`repository/wire.go`、`routes/admin.go|user.go`、`cmd/server/wire.go`（cleanup）、`domain_constants.go`（SettingKeyReportConfig）、router/index.ts、AppSidebar.vue（ReportIcon）、i18n common.ts nav + admin/index.ts ×2、go.mod/go.sum（wire cmd indirect）
 
@@ -337,25 +337,31 @@ docker compose up -d sub2api
 - 测试：新增 service 多群路由单测（去重、部分失败隔离、无群组、opt-in/类型开关、测试卡片、创建校验）；go build/vet + service/repository/handler/routes 全绿；vue-tsc EXIT=0；dev 33336 迁移后核对「计算群」13 人、投递表为空；stable 33333 发布 healthy、HTTP 200、前端 chunk 含新逻辑
 - 发布顺序：dev 启动先在共享库跑迁移 → 验证 → 备份 `sub2api:stable-backup-20261119-1459` → `sub2api:dev` 打 stable → 重建生产；旧 settings webhook 保留，可回滚
 
-### v4.2：报告素材与质量闭环（2026-11-23 代码完成，待 dev 验证/发布）
+### v4.2：报告素材与质量闭环（2026-11-23 dev 已验证，待发布 stable）
 
 > 背景：对照 §8 审查遗留，修四类 P0 缺陷。它们共同决定"报告内容对不对"——素材进不来正确的东西、垃圾条目没人拦、同周期还会重复刷群。
 > 决策（用户确认）：①截断配额取 **头 8k + 尾 56k**；②质量不合格时**照发 + ⚠️ 标记**（不扣住，漏报比质量差更伤信任），敏感信息例外。
 
 - [x] **1. 审计截断改头尾保留**（`securityaudit/prompt_snapshot.go`）：新增 `TrimRunesHeadTail`，`BuildFullPrompt` 超 65536 runes 时保 **头 8192（本轮用户消息）+ 尾 ≈57k（最近上下文）**，中间插 `……（此处省略 N 字）……` 标记，总长仍 ≤ limit（存储上界不变）。为什么只能在写入侧修：`full_prompt` 是段间无角色标记的拍平文本，读取侧无法重建轮次。**只影响新数据**，历史行不动
 - [x] **2. 对话窗口采样重写**（`service/report_service.go`）：`conversationWindowRunes` 700→1000、`conversationWindowBudget` 32→48（单日素材上限约 4.8 万字符）；`sampleWindows` 改为 ①**尾部优先**（后 30% 对话区分到一半窗口）②**段首对齐**（起点吸附到最近段落/代码块边界，最多 240 rune）③**跳过 ``` 围栏内窗口** ④锚点 `</available_skills>` 缺失且文本超长时先丢前 8192 rune；尾段容纳不下时预算回填前段，保证总窗口数稳定；完全相同的窗口去重
-- [x] **2b. 素材预算改为按段分配**（替代盲切头尾，2026-11-23 追加）：`buildFullPromptFromScanText` 用优先级分隔符**精确定位**「最新用户消息」段并单独给 **16k**（用户粘贴的超长日志只留前 16k）；其余内容按空行切块后**从后往前**取（每块 ≤2048、最多 24 块）；开头补 1536 字符系统提示词用于识别客户端/场景；命中 `</available_skills>` 的静态技能清单**整块丢弃**（实测 44% 的超长请求里它在吃头部预算）；被跳过处插「省略 N 段」标记。handler 与 worker 两条写入路径统一调用同一函数（worker 原本会用 scanText 覆盖 handler 的结果，只在 handler 改是无效的）。坑：NUL 剥离必须在切分优先级分隔符**之后**——分隔符本身含 `\x00`
+- [x] **2b. 素材预算改为按段分配**（替代盲切头尾，2026-11-23 追加）：`buildFullPromptFromScanText` 用优先级分隔符**精确定位**「最新用户消息」段并单独给 **16k**（用户粘贴的超长日志只留前 16k）；其余内容按空行切块后**从后往前**取（每块 ≤2048，只按预算停、不限块数）；开头补 1536 字符系统提示词用于识别客户端/场景；命中 `</available_skills>` 的静态技能清单**整块丢弃**（实测 44% 的超长请求里它在吃头部预算）；被跳过处插「省略 N 段」标记。handler 与 worker 两条写入路径统一调用同一函数（worker 原本会用 scanText 覆盖 handler 的结果，只在 handler 改是无效的）。坑：NUL 剥离必须在切分优先级分隔符**之后**——分隔符本身含 `\x00`
 - [x] **2c. 每 session 取 latest + 中段两条快照**（`repository/report_repo.go`）：`FetchPromptSnapshots` 由「每 session 只取最后一条」改为取两条——latest（最近一条）+ mid（会话时间中点之前最近一条）。因为每条请求都是"会话至今"的**累积快照**，mid 的尾部恰好覆盖 latest 因 64k 截断丢掉的中段，等于用零写入成本把当天覆盖面翻倍
 - [x] **2d. `prompt_audit_events.user_text`（P2，迁移 251）**：写入时直接把「剥掉 `<system-reminder>` 注入块后的最新用户消息」（≤4000 字）单独存一列，报告侧优先读它、历史行 `COALESCE` 回退到 full_prompt 头部 2000 字。**解决实测 8.1% 的提问静默丢失**（旧逻辑在头部 2000 字内遇到未闭合注入块就判为空）。未闭合块只去标签、保留其后内容以尽量救回输入；`CleanText=true` 的片段跳过正则二次提取（避免 "#"/"{" 开头被噪音启发式误杀）。写入点在 worker 里从 scanText 重算（job 行不存 user_text，不需要改 job 表）
+- [x] **2e. 窗口降噪（P4，2026-11-23）**：拍平文本没有 role 标记，读取侧拿不到「这段是 tool 还是 user」，所以用**内容特征做等效降权**——`reportWindowNoise` 按标点密度、超长行+低中文占比、基本纯英文长文本、diff/堆栈/npm 等特征、同行重复 ≥4 次打 0~1 的噪音分；采样改为**先按 1.5 倍预算抽候选**，再 `selectReportWindows` 按噪音从高到低裁回预算（噪音相同时优先淘汰更早窗口，保住"最近的工作"），输出仍保持时间顺序。**降噪不减少素材总量**，只是把预算让给更干净的窗口；纯中文叙述的窗口得 0 分、不会被误伤
 - [x] **3. 上下文总量预算**（`buildSummaryPrompt`）：新增 `reportUserPromptMaxRunes = 80000`，固定段（周期/目标/子报告/统计）优先，剩余额度在"提问记录"与"对话片段"间**交替从最早一条开始丢**；`max_prompts` 死配置接线（此前一直用硬编码 300），按"去重后最多注入多少条有效提问"生效、超出保留最近
 - [x] **4. 生成后质量校验**（新增 `service/report_quality.go`）：`checkReportQuality` 分三级——**硬违规**（小节结构缺失/多余第三节/禁语"次数·工具·模式"/敏感信息）、**软问题**（核心工作条目数、条目 >60 字、代码块/表格、空泛措辞，**仅记日志不打徽标**，避免多数正常报告都带 ⚠️）、**敏感**；硬违规把清单回灌**重写一次**，仍不通过则选更轻的一份**照发**并写 `quality_warnings`；敏感信息在两次输出中都出现时整篇判失败（`ErrReportSensitiveContent`，不落库不推送）。另加 `sanitizeReportBody` 自动剥掉 LLM 多输出的 H1 标题
 - [x] **5. 推送幂等**（`maybeAutoPushFeishu`）：`pushed_at` 非空即跳过自动推送并记日志。`persist` 的 Update 不触碰 `pushed_at`，所以重生成同周期报告时该字段仍是真实推送状态——Redis 标记丢失、leader 切换、节假日模式切换导致的"同周期再生成一次"不再重复刷群；补发/更新走卡片手动按钮（与 v3.1 语义一致）
 - [x] **6. 落库与前端**：迁移 250 加 `reports.quality_warnings`（纯增量）；domain/ent/DTO/仓储全链路；admin/user 报告卡片在推送徽标后新增 `badge-warning`「⚠️ 质量提示」徽标，悬浮显示具体问题；i18n zh/en `push.qualityWarn`
-- [x] 测试：新增 `report_quality_test.go`（结构调整/禁语/敏感/第三节目/软问题/标题剥离）、`report_material_test.go`（尾部优先/段首对齐/代码块/总量预算/max_prompts）、`TestMaybeAutoPushFeishuSkipsAlreadyPushedReport`、`TrimRunesHeadTail` 用例；`TestCollectConversationWindowsBudget` 按新预算更新
+- [x] 测试：新增 `report_quality_test.go`（结构调整/禁语/敏感/第三节目/软问题/标题剥离）、`report_material_test.go`（尾部优先/段首对齐/代码块/总量预算/max_prompts）、`TestMaybeAutoPushFeishuSkipsAlreadyPushedReport`、`TrimRunesHeadTail` 用例、窗口降噪打分/选择用例（`TestReportWindowNoiseClassifiesToolOutput`、`TestSelectReportWindowsDropsNoisiestKeepingOrder`）；`TestCollectConversationWindowsBudget` 按新预算更新（预算不再被突破：40 session → 48 窗）
 - [x] 验证：`go build ./...` + `go vet`(service/repository/securityaudit/handler) 全绿；`go test` service/securityaudit/handler 全绿；`vue-tsc --noEmit` EXIT=0
 - [x] **线上实测**（dev 33336，用真实流量核对新格式）：32 条新格式事件平均 **53.9k 字符**、p50 **65,536**（预算用满）、无一条塌缩到 5k 以下、`available_skills` 残留 1/22；`FetchPromptSnapshots` 实测 8 个 session → 16 行（latest+mid）
 - [x] **验证中发现并修复两个真实缺陷**（改前单元测试全绿也看不出来）：①尾部取块时"最后一块太短"直接 `break`，导致整段尾部被丢弃、素材塌缩到 **1.9k 字符**——改为 `continue` 继续往前找；②尾部块数硬限 24 块，而块平均只有几百字，**65k 预算只用掉 16k**——改为只按预算停
-- [ ] **待办：dev 验证 + 发布**。迁移 250 在共享库执行是唯一有副作用的步骤（纯增量、旧镜像兼容），发布顺序同 §4.2（dev 冒烟 → 备份 stable tag → 打 stable → 重建生产）
+- [x] **dev 验证已完成**（2026-11-23）：迁移 250/251 已在共享库生效（纯增量、旧镜像兼容），33336 health 200、无 panic/ERROR，前端 chunk 含质量徽标，真实流量核对存储格式与 user_text
+- [ ] **待办：发布 stable**。顺序同 §4.2（备份 `sub2api:stable-backup-<时间>` → dev 镜像打 stable → 重建 33333 → `/health` 校验），发布后 `git push fork`
+
+**已知未做（明确留到后续，不阻塞本次发布）**：
+- **报告里显示「素材覆盖率」**：生成时记下"有效素材字符 / 原始上下文字符"，前端/卡片展示，让人自己判断报告可信度。属于体验增强，不是缺陷。
+- **审计扫描器故障 `prompt_guard_unavailable`**：2026-11-23 排查时发现近 24h 全部 48,618 条审计事件都是 `scan_failed:prompt_guard_unavailable`（风险扫描实际处于关闭状态）。**与日报链路无关**（v3.5 降级落库保证消息仍完整保存，日报素材不受影响），但属于独立的生产问题，需单独排查审计节点（MiniMax 账号 id=5 / 端点 / key）。
 
 ### 后续迭代
 

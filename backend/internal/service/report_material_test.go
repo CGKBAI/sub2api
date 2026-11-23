@@ -129,6 +129,49 @@ func TestCollectUserTurnsPrefersCleanText(t *testing.T) {
 	}
 }
 
+func TestReportWindowNoiseClassifiesToolOutput(t *testing.T) {
+	prose := strings.Repeat("今天修复了日报导出乱码问题，补充了单元测试，并和同事确认了发布计划。", 20)
+	if score := reportWindowNoise(prose); score > 0.4 {
+		t.Fatalf("prose noise = %.2f, want <= 0.4", score)
+	}
+
+	toolDump := "diff --git a/foo.go b/foo.go\n+++ b/foo.go\n@@ -1,3 +1,4 @@\n" +
+		strings.Repeat("+func Foo() { return 1 }\n", 60)
+	if score := reportWindowNoise(toolDump); score < 0.6 {
+		t.Fatalf("diff noise = %.2f, want >= 0.6", score)
+	}
+
+	jsonDump := strings.Repeat(`{"id":1,"name":"x","deps":{"a":"^1.0.0","b":"^2.0.0"}},`, 40)
+	if score := reportWindowNoise(jsonDump); score < 0.6 {
+		t.Fatalf("json noise = %.2f, want >= 0.6", score)
+	}
+}
+
+func TestSelectReportWindowsDropsNoisiestKeepingOrder(t *testing.T) {
+	cands := []reportWindowCandidate{
+		{text: "p1", noise: 0.1}, {text: "j1", noise: 0.9},
+		{text: "p2", noise: 0.1}, {text: "j2", noise: 0.9},
+		{text: "p3", noise: 0.1}, {text: "j3", noise: 0.9},
+		{text: "p4", noise: 0.1}, {text: "j4", noise: 0.9},
+	}
+	got := selectReportWindows(cands, 5)
+	want := []string{"p1", "p2", "p3", "p4", "j4"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("selected = %v, want %v", got, want)
+	}
+
+	// 噪音相同时优先淘汰更早的窗口（保住最近的工作）
+	flat := []reportWindowCandidate{{text: "a", noise: 0.2}, {text: "b", noise: 0.2}, {text: "c", noise: 0.2}, {text: "d", noise: 0.2}}
+	if got := selectReportWindows(flat, 2); strings.Join(got, ",") != "c,d" {
+		t.Fatalf("tie-break selected = %v, want [c d]", got)
+	}
+
+	// 候选不足预算时全部保留
+	if got := selectReportWindows(flat, 10); len(got) != 4 {
+		t.Fatalf("under budget should keep all, got %d", len(got))
+	}
+}
+
 func TestBuildSummaryPromptRespectsTotalBudget(t *testing.T) {
 	repo := &materialFakeRepo{turns: newMaterialTurns(400)}
 	svc := NewReportService(repo, nil, nil)

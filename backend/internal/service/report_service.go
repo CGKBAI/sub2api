@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -49,6 +50,11 @@ const (
 	// 超预算时按"先丢最早素材"的顺序裁剪，避免请求体超出模型上下文后由
 	// 服务端静默截断（那样丢哪段完全不可控）。
 	reportUserPromptMaxRunes = 80000
+	// conversationWindowOversampleNum/Den 窗口过采样倍数：先按 1.5 倍预算抽候选，
+	// 再按"噪音分"裁回预算。这样降噪不减少素材总量，只是把位置让给更干净的窗口
+	// （拍平后没有 role 标记，只能用内容特征近似"tool 段降权"）。
+	conversationWindowOversampleNum = 3
+	conversationWindowOversampleDen = 2
 )
 
 // ReportService 日报/周报核心服务。
@@ -810,14 +816,19 @@ func collectConversationWindows(snaps []UserPromptSnippet) []string {
 	if len(snaps) == 0 {
 		return nil
 	}
-	per := conversationWindowBudget / len(snaps)
+	// 先按 1.5 倍预算抽候选，再由 selectReportWindows 按噪音裁回预算：
+	// 降噪不减少素材总量，只把位置让给更干净的窗口。
+	per := conversationWindowBudget * conversationWindowOversampleNum / conversationWindowOversampleDen
+	if len(snaps) > 0 {
+		per = per / len(snaps)
+	}
 	if per < 1 {
 		per = 1
 	}
 	if per > conversationWindowsPerSnapCap {
 		per = conversationWindowsPerSnapCap
 	}
-	out := make([]string, 0, len(snaps)*per)
+	candidates := make([]reportWindowCandidate, 0, len(snaps)*per)
 	seen := make(map[string]struct{}, len(snaps)*per)
 	for _, s := range snaps {
 		for _, w := range sampleWindows(s.Content, per, conversationWindowRunes) {
@@ -825,10 +836,163 @@ func collectConversationWindows(snaps []UserPromptSnippet) []string {
 				continue
 			}
 			seen[w] = struct{}{}
-			out = append(out, w)
+			candidates = append(candidates, reportWindowCandidate{text: w, noise: reportWindowNoise(w)})
+		}
+	}
+	return selectReportWindows(candidates, conversationWindowBudget)
+}
+
+// reportWindowCandidate 是一个待选窗口及其噪音分（0=干净，1=纯噪音）。
+type reportWindowCandidate struct {
+	text  string
+	noise float64
+}
+
+// selectReportWindows 在候选里保留至多 budget 个窗口：按噪音从高到低淘汰，
+// 噪音相同时优先淘汰**更早**的窗口（保住"最近的工作"），输出保持原始时间顺序。
+// 所以降噪既不减少素材量，也不打乱时间线。
+func selectReportWindows(candidates []reportWindowCandidate, budget int) []string {
+	if budget <= 0 {
+		budget = 1
+	}
+	keep := make([]bool, len(candidates))
+	for i := range keep {
+		keep[i] = true
+	}
+	if toDrop := len(candidates) - budget; toDrop > 0 {
+		order := make([]int, 0, len(candidates))
+		for i := range candidates {
+			order = append(order, i)
+		}
+		sort.SliceStable(order, func(a, b int) bool {
+			ia, ib := order[a], order[b]
+			if candidates[ia].noise != candidates[ib].noise {
+				return candidates[ia].noise > candidates[ib].noise
+			}
+			return ia < ib
+		})
+		for i := 0; i < toDrop; i++ {
+			keep[order[i]] = false
+		}
+	}
+	out := make([]string, 0, len(candidates))
+	for i, c := range candidates {
+		if keep[i] {
+			out = append(out, c.text)
 		}
 	}
 	return out
+}
+
+// conversationNoiseMarkers 是工具输出/日志的高置信特征。
+var conversationNoiseMarkers = []string{
+	"diff --git",
+	"+++ b/",
+	"--- a/",
+	"node_modules/",
+	"package-lock.json",
+	"Traceback (most recent call last)",
+	"npm ERR!",
+}
+
+// reportWindowNoise 给窗口打 0~1 的噪音分（越高越像工具输出/代码/日志）。
+//
+// 为什么用内容特征而不是 role：full_prompt 是拍平文本，段间没有角色标记，
+// 读取侧拿不到"这一段是 tool 还是 user"。所以这里用内容特征做**等效降权**——
+// 标点密度高、行很长、几乎没有中文、命中 diff/堆栈特征、同一行重复多次，
+// 都判为噪音；纯中文叙述的人话得 0 分。
+func reportWindowNoise(window string) float64 {
+	runes := []rune(window)
+	if len(runes) == 0 {
+		return 1
+	}
+	var punct, cjk, ascii int
+	lines, cur, maxLine := 1, 0, 0
+	for _, r := range runes {
+		if r == '\n' {
+			lines++
+			if cur > maxLine {
+				maxLine = cur
+			}
+			cur = 0
+			continue
+		}
+		cur++
+		if r < 128 {
+			ascii++
+		}
+		if unicode.Is(unicode.Han, r) {
+			cjk++
+		}
+		switch r {
+		case '{', '}', '[', ']', '(', ')', ';', '=', '<', '>', '"', '\\', '|', '`', '$':
+			punct++
+		}
+	}
+	if cur > maxLine {
+		maxLine = cur
+	}
+
+	total := float64(len(runes))
+	cjkRatio := float64(cjk) / total
+	punctRatio := float64(punct) / total
+	avgLine := total / float64(lines)
+
+	score := 0.0
+	if punctRatio > 0.25 {
+		score += 0.35
+	} else if punctRatio > 0.15 {
+		score += 0.15
+	}
+	// 超长行 + 几乎没有中文 = 压缩 JSON / 打包产物 / 长路径
+	if avgLine > 200 && cjkRatio < 0.3 {
+		score += 0.3
+	}
+	// 基本纯英文的代码/日志（中文用户的工作报告不会这样）
+	if cjkRatio < 0.05 && ascii > 400 {
+		score += 0.25
+	}
+	for _, marker := range conversationNoiseMarkers {
+		if strings.Contains(window, marker) {
+			score += 0.4
+			break
+		}
+	}
+	if hasRepeatedLongLine(runes) {
+		score += 0.2
+	}
+	if score > 1 {
+		score = 1
+	}
+	return score
+}
+
+// hasRepeatedLongLine 判断是否同一行长内容重复出现 ≥4 次（典型的分隔线/日志刷屏）。
+func hasRepeatedLongLine(runes []rune) bool {
+	counts := make(map[string]int, 16)
+	var line strings.Builder
+	flush := func() {
+		if line.Len() > 40 {
+			counts[line.String()]++
+		}
+		line.Reset()
+	}
+	for _, r := range runes {
+		if r == '\n' {
+			flush()
+			continue
+		}
+		if line.Len() <= 4096 {
+			line.WriteRune(r)
+		}
+	}
+	flush()
+	for _, count := range counts {
+		if count >= 4 {
+			return true
+		}
+	}
+	return false
 }
 
 // sampleWindows 在 region 内抽取 n 个长为 size（rune）的窗口。
