@@ -181,7 +181,8 @@ func TestBuildSummaryPromptRespectsTotalBudget(t *testing.T) {
 
 	start := time.Date(2026, 11, 23, 0, 0, 0, 0, time.Local)
 	stats := ReportStats{Requests: 400}
-	prompt, _, err := svc.buildSummaryPrompt(context.Background(), cfg, ReportTypeDaily, start, start.Add(24*time.Hour), 9, &stats)
+	windows := reportWindows{Start: start, End: start.Add(24 * time.Hour)}
+	prompt, _, _, err := svc.buildSummaryPrompt(context.Background(), cfg, ReportTypeDaily, windows, 9, &stats)
 	if err != nil {
 		t.Fatalf("buildSummaryPrompt: %v", err)
 	}
@@ -206,7 +207,8 @@ func TestBuildSummaryPromptHonoursMaxPrompts(t *testing.T) {
 
 	start := time.Date(2026, 11, 23, 0, 0, 0, 0, time.Local)
 	stats := ReportStats{Requests: 50}
-	prompt, _, err := svc.buildSummaryPrompt(context.Background(), cfg, ReportTypeDaily, start, start.Add(24*time.Hour), 9, &stats)
+	windows := reportWindows{Start: start, End: start.Add(24 * time.Hour)}
+	prompt, _, _, err := svc.buildSummaryPrompt(context.Background(), cfg, ReportTypeDaily, windows, 9, &stats)
 	if err != nil {
 		t.Fatalf("buildSummaryPrompt: %v", err)
 	}
@@ -233,7 +235,8 @@ func TestBuildSummaryPromptDropsSnapshotsBeforeTurnsWhenOverBudget(t *testing.T)
 
 	start := time.Date(2026, 11, 23, 0, 0, 0, 0, time.Local)
 	stats := ReportStats{Requests: 300}
-	prompt, _, err := svc.buildSummaryPrompt(context.Background(), cfg, ReportTypeDaily, start, start.Add(24*time.Hour), 9, &stats)
+	windows := reportWindows{Start: start, End: start.Add(24 * time.Hour)}
+	prompt, _, _, err := svc.buildSummaryPrompt(context.Background(), cfg, ReportTypeDaily, windows, 9, &stats)
 	if err != nil {
 		t.Fatalf("buildSummaryPrompt: %v", err)
 	}

@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-11-23（**v4.2 报告素材与质量闭环：dev 33336 已验证通过，待发布 stable**：审计落库改「按段分配预算」+ user_text 列、窗口尾部优先/段首对齐/降噪、每 session 双快照、生成后质量校验（不合格照发+⚠️）、推送幂等，见 §8 v4.2；生产仍为 v4.1 stable）。
+> 本文档是完整项目上下文。最后更新：2026-11-24（**v4.3 日报附节 D 方案代码已实现，dev 33336 启动冒烟与真实流量生成验证通过**：20:00 照发，20:00–24:00 工作进次日日报 `## 附：昨晚 20:00 后补充`，正文/附节以 20:00 为硬切点；后端 build/service 测试、前端 vue-tsc 全绿，见 §8 v4.3；v4.2 已在 dev 验证、待发布 stable；生产仍为 v4.1 stable）。
 
 ## 1. 功能与当前状态总览
 
@@ -18,6 +18,7 @@
 10. ✅ **DeepSeek Search/Fetch**（2026-11-03 已上线生产）：`POST /v1/tools/search`、`POST /v1/tools/fetch`，仅原生 DeepSeek 分组（Composite 等一律 404）；复用调度器只选 DeepSeek API Key 账号；请求/成功响应原样转发；200 且有 results/content 才按次计费（默认 0.005，可覆盖/免费/倍率），Search query 走提示词审计，见 §8 v4.0
 11. ✅ **飞书多群推送**（2026-11-19 已上线生产）：新增 `report_feishu_groups` / `report_feishu_group_members` / `report_feishu_deliveries` 三表；定时与手动推送都按报告作者所属的**所有启用群组**投递（同一 webhook 去重），单群失败不影响其他群；原全局 webhook 自动迁移为「计算群」，仅当时 `report_push_enabled=true` 的 13 个用户入组；管理员在报告页「报告群组」tab 维护群与成员，见 §8 v4.1
 12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 dev 已验证，待发布）：①审计截断**按段分配预算**（最新用户消息 16k + 尾部块 + 1.5k 系统提示词，静态技能清单丢弃），不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③**每 session 取「最新 + 中段」两条快照**，补回被截断丢掉的中段；④生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；⑤推送幂等：已推送过的周期不再自动重复推；⑥新增 `user_text` 列，救回此前静默丢失的 8.1% 用户提问；⑦窗口降噪：按内容特征给窗口打分，先把预算让给干净窗口。见 §8 v4.2
+13. 🧭 **日报附节「昨晚 20:00 后补充」v4.3**（2026-11-24 代码已实现，dev 启动冒烟与真实流量生成验证通过）：用户选 D 方案——**20:00 照发主日报**，20:00–24:00 的工作写进**次日日报末尾附节**，不额外发卡片、不延迟主日报；正文/附节以 20:00 为硬切点 `[D 00:00,D 20:00)` / `[D-1 20:00,D 00:00)`；格式与改造清单见 §8 v4.3
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -143,7 +144,7 @@ docker compose up -d sub2api
 |---|---|
 | `risk_control_enabled` | true |
 | `prompt_audit_config` | 异步审计（async，不阻断），审计节点：**MiniMax** `https://api.minimaxi.com` + `MiniMax-M2`（账号 id=5 的 key，AES-256-GCM 加密存 token_ciphertext，密钥=.env 的 TOTP_ENCRYPTION_KEY），input_limit=2000，timeout=15000ms |
-| `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=60，单条截断 800 字符，日报/周报/月报 cron 均 `0 19 * * *`（仅时分生效），skip_holidays=true（**admin 报告页页头按钮运行时切换**；开=工作日规则，关=日报每天+当日请求>10 条阈值/周报周五/月报月底出当月；存量 JSON 缺字段时 cron 读取自动补默认，skip_holidays 缺省=false 需 SQL 或按钮显式写入）；飞书仅保留 `feishu_enabled` + 三类型开关，`feishu_webhook_url`/`feishu_secret` 字段保留作回滚兜底但**新代码不再读取**（群组 webhook 见 `report_feishu_groups`） |
+| `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=60，单条截断 800 字符，日报/周报/月报 cron 均 `0 20 * * *`（仅时分生效；2026-11-24 核对生产库），skip_holidays=false（**admin 报告页页头按钮运行时切换**；开=工作日规则，关=日报每天+当日请求>10 条阈值/周报周五/月报月底出当月；存量 JSON 缺字段时 cron 读取自动补默认，代码默认 true，skip_holidays 缺省=false 需 SQL 或按钮显式写入）；飞书仅保留 `feishu_enabled` + 三类型开关，`feishu_webhook_url`/`feishu_secret` 字段保留作回滚兜底但**新代码不再读取**（群组 webhook 见 `report_feishu_groups`） |
 
 配置修改：直接 UPDATE settings 表（ConfigManager 每 5 秒 TTL reload，无需重启）；endpoint token 必须先用 TOTP_ENCRYPTION_KEY 做 AES-256-GCM 加密（base64(nonce+ct+tag)，node crypto 可做）。
 
@@ -167,6 +168,10 @@ docker compose up -d sub2api
 **报告素材与质量闭环（v4.2，2026-11-23，未发布）**：
 - 新增：`migrations/250_report_quality_warnings.sql`（reports.quality_warnings，纯增量）、`migrations/251_prompt_audit_user_text.sql`（prompt_audit_events.user_text，纯增量）、`service/report_quality.go`（+`_test.go`）、`service/report_material_test.go`
 - 修改：`securityaudit/prompt_snapshot.go`（`buildFullPromptFromScanText` 按段分配预算 + `LatestUserTextFromScanText`）、`securityaudit/prompt_worker.go`（从 scanText 重算 FullPrompt/UserText）、`securityaudit/prompt_repository.go`（INSERT 增列）、`securityaudit/prompt_types.go`（PromptSnapshot.UserText）、`service/report_service.go`（`buildSummary` 拆为 `buildSummaryPrompt` + `completeCheckedReport`、窗口采样重写 + 降噪打分、总量预算、推送幂等）、`service/report.go`（UserPromptSnippet.CleanText）、`domain/report.go`（QualityWarnings + ErrReportSensitiveContent）、`ent/schema/report.go`（quality_warnings，含 ent 生成物）、`repository/report_repo.go`（user_text 读取 + 双快照）、`handler/dto/report.go`、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（⚠️ 质量提示徽标）、i18n zh/en `push.qualityWarn`
+
+**日报附节（v4.3，2026-11-24，未发布）**：
+- 新增：`service/report_annex_test.go`
+- 修改：`service/report_service.go`（`reportWindows`、`reportDailyCutoff`、`reportDailyWindow`、`resolveReportWindows`、`GenerateReport`/`GenerateForAllUsers` 双窗口、`buildSummaryPrompt`/`collectReportMaterials`/`trimReportMaterials` 附节素材、`reportSystemPrompt` 附节指令）、`service/report_quality.go`（附节 regex、`splitReportAnnex`、`normalizeReportAnnex`、附节质量规则）、`domain/report.go`（`ReportStats.AnnexRequests`，JSON 字段无需迁移）、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（periodLabel + annexRequests 展示）、i18n zh/en（`stats.annexRequests`、`config.scheduleHint`）
 
 **修改官方文件（挂载点）**：`config.go`（ReportConfig）、`handler.go|handler/wire.go`、`service/wire.go`、`repository/wire.go`、`routes/admin.go|user.go`、`cmd/server/wire.go`（cleanup）、`domain_constants.go`（SettingKeyReportConfig）、router/index.ts、AppSidebar.vue（ReportIcon）、i18n common.ts nav + admin/index.ts ×2、go.mod/go.sum（wire cmd indirect）
 
@@ -362,6 +367,80 @@ docker compose up -d sub2api
 **已知未做（明确留到后续，不阻塞本次发布）**：
 - **报告里显示「素材覆盖率」**：生成时记下"有效素材字符 / 原始上下文字符"，前端/卡片展示，让人自己判断报告可信度。属于体验增强，不是缺陷。
 - **审计扫描器故障 `prompt_guard_unavailable`**：2026-11-23 排查时发现近 24h 全部 48,618 条审计事件都是 `scan_failed:prompt_guard_unavailable`（风险扫描实际处于关闭状态）。**与日报链路无关**（v3.5 降级落库保证消息仍完整保存，日报素材不受影响），但属于独立的生产问题，需单独排查审计节点（MiniMax 账号 id=5 / 端点 / key）。
+
+### v4.3：日报附节「昨晚 20:00 后补充」（D 方案，2026-11-24 代码已实现，dev 启动冒烟与真实流量生成验证通过）
+
+> 背景：生产日报在 20:00 生成（库内 `report_config` 当前 `0 20 * * *`、`skip_holidays=false`），当天 20:00–24:00 的使用不会进当晚报告，也不会自动滚进次日。实测近 7 天 11-18 有 24.7%、11-22 有 66.7% 的请求发生在 20:00 后；11-22 当晚 3 份日报都是 20:00 生成的，那晚大部分工作不在里面。
+> 决策（用户确认，D 方案）：**20:00 照发主日报；20:00 后的工作写进次日日报末尾的附节**，不额外发卡片、不延迟主日报。
+> 核心口径：以日报 cron 的时分（当前 20:00）为硬切点。报告日 D 的正文覆盖 `[D 00:00, D 20:00)`；附节覆盖 `[D-1 20:00, D 00:00)`。两个窗口在 D 20:00 生成时都已闭合，补跑/重生成不会产生时间漂移，也不会和正文重叠。
+
+**格式（固定；附节只在有有效素材时出现）**
+
+```markdown
+# 工作日报（2026-11-24）- 谢翔宇
+
+## 一、今日核心工作
+1. 完成报告附节数据链路改造并补充单测
+2. 修复报告页在跨时区下的日期筛选偏差
+3. 评审群组推送重试方案并给出落地建议
+
+## 二、明日工作计划
+1. 联调附节生成到飞书卡片的端到端流程
+2. 补齐附节的质量校验用例
+
+## 三、近期目标计划            ← 仅当用户填写了近期目标
+1. 推进报告链路 v4.3 在 dev 验证后发布 stable
+
+## 附：昨晚 20:00 后补充      ← 时分跟随日报 cron；当前 20:00
+1. 完成审计表 user_text 回填脚本并在预发验证
+2. 处理线上导出任务空数据报错，已合并主分支
+```
+
+附节规则：
+- **位置**：全文最后；有第三节时在其后，无第三节时在第二节后。标题形如 `## 附：昨晚 HH:MM 后补充`，`HH:MM` 取日报 cron 时分（当前 20:00），**不写死**，改 cron 时自动跟随。附节**不参与「一/二/三/四」编号**，避免用户没填近期目标时出现「三、四」跳号。
+- **条数/长度**：1–3 条，按重要性排序；每条 ≤30 字（与 system prompt 现有要求一致），动词开头。
+- **内容**：只写昨晚 20:00–24:00 的实际工作；不重复「今日核心工作」；写结果或推进到哪一步，不写工具、模式、请求次数、token/费用等统计数字。
+- **无有效素材**：整节省略，不输出「无」「暂无」占位。
+- **锚点**：「昨晚」以报告日期 D 为锚点，不是生成日期；补生成历史日报时语义不变。
+- **敏感信息**：与正文同规则，命中且重写后仍在 → 整篇失败（不落库不推送）。
+- **飞书**：附节随次日日报同一张卡片推送，`##` 由现有 `report_feishu.go` 转成粗体行；不额外发卡片。
+
+**数据与生成口径**
+
+- 主素材查询 `[D 00:00, D 20:00)`；附节素材查询 `[D-1 20:00, D 00:00)`；全部半开区间，`20:00:00` 整点归附节、`19:59:59` 归正文。
+- 同一次 LLM 调用：prompt 增加「前一日 20:00 后素材」块；只有存在有效素材时才注入该块和附节指令。有效素材 = 去噪后至少 1 条用户提问或 1 个对话窗口；只有 usage 统计、没有可读内容时不出附节。
+- 素材预算：**主素材维持 `reportUserPromptMaxRunes=80000` 不变**，附节单独封顶 20000（总上下文上限约 100k 字符，避免为了附节压缩正文素材）；附节素材同样按 session 分组、尾部优先、降噪。若实际模型上下文吃紧，再降附节预算到 12k。
+- 统计口径：卡片/图表的 `stats` 仍只统计正文窗口 `[D 00:00, D 20:00)`，附节是叙述性补充，不并入请求数/token/费用，避免同一晚数据在两天统计里重复计数。`ReportStats` 增加 `annex_requests`（JSON 字段，无需迁移），卡片统计行显示「另含前晚 20:00 后 N 条」；附节内容不进图表。
+- 周期字段：日报 `period_start` 保持 D 00:00（唯一键/筛选不变），`period_end` 改为 D 20:00，**只描述正文/统计窗口**；附节是跨周期补充，不改变 period 字段。前端日报标签显示 `2026-11-24（截至 20:00）`，周/月标签不变。旧报告不改。
+- 活跃用户筛选：日报改为「正文 ∪ 附节」窗口的并集，避免只在 20:00 后用过、次日没再用的人拿不到报告；`stats.Requests==0` 但附节有素材时仍生成（主统计为 0）。
+- 请求阈值：关模式下 `>10 条` 改用正文+附节合计，避免 20:00 后才补够量的用户被跳过。
+- 手动生成：与定时同口径，选日期 D 生成正文 `[D 00:00,D 20:00)` + 附节 `[D-1 20:00,D 00:00)`；当天 20:00 前手动生成时正文只到生成时刻（重生成会覆盖修正）。
+- 补跑：20:00 后恢复仍只生成到 20:00 的正文，20:00 之后归次日附节；不再把恢复时刻前的数据塞进当天正文。
+- 幂等/推送：附节属于同一份 `reports` 记录，`pushed_at` 语义不变；次日日报推送失败仍走手动补发。
+- 周报/月报：按日报摘要聚合，附节随次日日报进入次日所在周期；跨周/跨月的最后一晚可能计入下一周期（如周日 20:00 后进入下周一日报）。v1 不做跨周期回算，作为已知边界。
+- 节假日模式边界：附节依赖「次日有日报」。`skip_holidays=true` 时周末/节假日次日不生成日报，该晚 20:00 后的数据不会被附节覆盖（仍按现有「周末手动重生成」处理）；当前生产 `skip_holidays=false`，不受影响。
+- 历史数据：只影响新生成的报告；旧报告不自动加附节，重生成时按新口径。v1 不加数据库列（附节是 `ai_summary` 的一部分）。
+
+**改造清单（代码已完成，dev 启动冒烟与真实流量生成验证通过，待发布 stable）**
+
+- [x] 新增 `resolveReportWindows`/`reportDailyWindow`/`reportDailyCutoff`：日报正文 `[D 00:00, D 切点)`、附节 `[D-1 切点, D 00:00)`，cutoff 取 `DailySchedule` 时分；周/月沿用 `ReportPeriod`
+- [x] `GenerateReport` 日报路径分别取两组素材；主素材预算 80k 不变，附节独立 20k；`reportSystemPrompt` 日报分支加附节格式与规则
+- [x] `report_quality.go` 识别 `## 附：昨晚 HH:MM 后补充`（时分取配置）：有素材但缺失 → 硬违规重写；无素材却出现 → 生成后剥除；附节条目 1–3/≤30 字软校验；附节不参与「三/四」编号判断
+- [x] `splitReportAnnex`/`normalizeReportAnnex` 兼容附节标题（含 `**附**`/`### 附` 归一化）；前端 Markdown 渲染无需改动
+- [x] 日报活跃用户筛选改为正文∪附节并集；`belowDailyMinRequests` 用正文+附节合计；`stats.Requests==0` 但有附节素材时允许生成
+- [x] 日报 `period_end` 改切点时间；前端日报 periodLabel 显示 `2026-11-24（截至 20:00）`，旧报告只显示日期；周/月不变
+- [x] admin 配置提示补日报切点说明；报告卡片统计行显示「另含前晚切点后 N 条」（`annex_requests`，JSON 字段无需迁移）
+- [x] 单测：`report_annex_test.go`（19:59:59/20:00:00 半开边界、切点解析回退、附节素材注入、附节质量规则、附节归一化/剥除）；service 全量测试、`go build`、`vue-tsc` 全绿
+- [x] dev 33336：buildx 构建 `sub2api:dev` → 重建容器 → `/health` 200、无 panic/ERROR；前端二进制已含 `annexRequests`/`截至` 新逻辑
+- [x] **真实流量生成验证**（dev 33336 admin 手动，user 7 / 2026-11-20）：正文 5 条、附节 33 条，与 `usage_logs` 两窗口计数完全一致；附节内容命中 11-19 20:00–24:00 prompt（IdeaToDoc/宣传片）；`period_end=20:00`、`pushed_at` 为空（手动不自动推）；质量校验无警告；验证后已删除测试报告 854
+- [x] 补跑切点单测（22:00 补跑正文仍切 20:00）与飞书附节加粗转换单测
+- [ ] 定时 20:00 自动推送实跑/飞书群实际卡片待发布后观察（避免测试期打扰真实群）
+
+**已定取舍（不再讨论）**
+
+- 标题用 `附：`，不用 `四、`：编号会随「有没有近期目标」漂移。
+- 附节统计不并入主 `stats`：同一晚数据不能在两天重复计数；需要展示就单列 `annex_requests`。
+- v1 不做跨周/跨月回算：先保证「不丢」，周期归属边界后续再优化。
 
 ### 后续迭代
 

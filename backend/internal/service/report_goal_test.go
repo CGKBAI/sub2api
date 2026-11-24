@@ -90,7 +90,8 @@ func runGoalBuildSummary(t *testing.T, reportType, goal string) (sys, user strin
 	start := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
 	stats := ReportStats{Requests: 5}
-	if _, _, err := svc.buildSummary(context.Background(), cfg, reportType, start, end, 9, "测试用户", &stats); err != nil {
+	windows := reportWindows{Start: start, End: end}
+	if _, _, _, err := svc.buildSummary(context.Background(), cfg, reportType, windows, 9, "测试用户", &stats); err != nil {
 		t.Fatalf("buildSummary: %v", err)
 	}
 	for _, m := range captured {

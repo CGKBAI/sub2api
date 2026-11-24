@@ -25,6 +25,8 @@ export interface ReportStats {
   model_tokens: Record<string, number>
   hourly: Record<string, number>
   prompt_count: number
+  // 前一日日报切点后的请求数（仅日报附节使用，不并入 requests）
+  annex_requests?: number
 }
 
 export type ReportType = 'daily' | 'weekly' | 'monthly'

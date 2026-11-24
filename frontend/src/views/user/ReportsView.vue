@@ -167,6 +167,12 @@ function periodLabel(report: Report): string {
   const end = new Date(report.period_end)
   const fmt = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  if (report.type === 'daily') {
+    // 新报告 period_end = 当天切点；旧报告 period_end = 次日 00:00，只显示日期。
+    if (fmt(start) !== fmt(end)) return fmt(start)
+    const cutoff = `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`
+    return `${fmt(start)}（截至 ${cutoff}）`
+  }
   return `${fmt(start)} ~ ${fmt(end)}`
 }
 
@@ -360,6 +366,12 @@ const modelEntries = (report: Report) =>
                 ${{ (report.stats?.total_cost ?? 0).toFixed(4) }}
               </div>
             </div>
+          </div>
+          <div
+            v-if="(report.stats?.annex_requests ?? 0) > 0"
+            class="mt-1 text-xs text-gray-500 dark:text-gray-400"
+          >
+            {{ t('admin.reports.stats.annexRequests', { n: report.stats?.annex_requests ?? 0 }) }}
           </div>
 
           <div v-if="modelEntries(report).length" class="mt-3 flex flex-wrap gap-1.5">

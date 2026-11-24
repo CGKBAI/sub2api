@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -25,6 +26,10 @@ const maxReportTurns = 300
 // reportDailyMinRequests 节假日感知关闭（skip_holidays=false）时定时日报的
 // 请求阈值：当日请求 ≤ 该值不生成（过滤低用量噪音）；手动生成不受限。
 const reportDailyMinRequests = 10
+
+// reportAnnexPromptMaxRunes 是「昨晚 20:00 后补充」附节素材的独立预算。
+// 主素材预算 reportUserPromptMaxRunes 保持不变，避免为了附节压缩正文。
+const reportAnnexPromptMaxRunes = 20000
 
 // 报告对话窗口采样参数：快照按 session 分组拉取（每 session 取最全一条，最多
 // reportSnapshotCount 个 session）；全部窗口预算 conversationWindowBudget 按
@@ -104,6 +109,80 @@ func ReportPeriod(reportType string, ref time.Time) (time.Time, time.Time, error
 	}
 }
 
+// reportWindows 描述一份报告实际使用的两个素材窗口。
+//
+// 日报以 DailySchedule 的时分（当前生产 20:00）为硬切点：
+//   - 正文/统计：报告日 D [D 00:00, D 20:00)
+//   - 附节：前一日 [D-1 20:00, D 00:00)
+//
+// 两个窗口在 D 20:00 生成时都已闭合；补跑/重生成不会漂移，也不会重叠。
+// 周报/月报只使用 Start/End，AnnexStart/AnnexEnd 为零值。
+type reportWindows struct {
+	Start      time.Time
+	End        time.Time
+	AnnexStart time.Time
+	AnnexEnd   time.Time
+	AnnexLabel string // "20:00"
+}
+
+// reportDailyCutoff 从 DailySchedule 的「分 时」字段解析日报切点。
+// 解析失败时回退到配置默认的 19:00，保证不会因为非法 cron 生成空窗口。
+func reportDailyCutoff(cfg *ReportLLMConfig) (hour, minute int, label string) {
+	hour, minute = 19, 0
+	if cfg != nil {
+		fields := strings.Fields(strings.TrimSpace(cfg.DailySchedule))
+		if len(fields) >= 2 {
+			if m, err := strconv.Atoi(fields[0]); err == nil && m >= 0 && m < 60 {
+				minute = m
+			}
+			if h, err := strconv.Atoi(fields[1]); err == nil && h >= 0 && h < 24 {
+				hour = h
+			}
+		}
+	}
+	// 00:00 无法把自然日切成「正文 + 附节」两个非空窗口，按产品约定回退 20:00。
+	if hour == 0 && minute == 0 {
+		hour, minute = 20, 0
+	}
+	return hour, minute, fmt.Sprintf("%02d:%02d", hour, minute)
+}
+
+// reportDailyWindow 计算日报正文/附节窗口。cutoff 为当天 00:00 后的偏移。
+func reportDailyWindow(ref time.Time, hour, minute int) (start, end, annexStart, annexEnd time.Time) {
+	start = timezone.StartOfDay(ref)
+	cutoff := time.Duration(hour)*time.Hour + time.Duration(minute)*time.Minute
+	if cutoff <= 0 {
+		// 00:00 不是有效的日报切点（正文会变成空窗口）；回退到 20:00。
+		cutoff = 20 * time.Hour
+	}
+	end = start.Add(cutoff)
+	annexStart = end.Add(-24 * time.Hour)
+	annexEnd = start
+	return start, end, annexStart, annexEnd
+}
+
+// resolveReportWindows 返回指定类型/基准时间的素材窗口。
+// 日报使用配置切点；周报/月报保持 ReportPeriod 的自然周期。
+func resolveReportWindows(reportType string, ref time.Time, cfg *ReportLLMConfig) (reportWindows, error) {
+	start, end, err := ReportPeriod(reportType, ref)
+	if err != nil {
+		return reportWindows{}, err
+	}
+	out := reportWindows{Start: start, End: end}
+	if reportType == domain.ReportTypeDaily {
+		hour, minute, label := reportDailyCutoff(cfg)
+		start, end, annexStart, annexEnd := reportDailyWindow(ref, hour, minute)
+		out = reportWindows{
+			Start:      start,
+			End:        end,
+			AnnexStart: annexStart,
+			AnnexEnd:   annexEnd,
+			AnnexLabel: label,
+		}
+	}
+	return out, nil
+}
+
 // GenerateReport 为单个用户生成指定周期（日/周/月）的报告。
 // trigger 区分生成来源：manual（管理端/用户手动）永不自动推飞书；
 // scheduled（定时任务）按开关自动推。已存在同周期报告时覆盖更新（手动重试语义）。
@@ -118,16 +197,33 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 		ctx = context.Background()
 	}
 
-	start, end, err := ReportPeriod(reportType, ref)
+	cfg, err := s.GetReportConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	windows, err := resolveReportWindows(reportType, ref, cfg)
+	if err != nil {
+		return nil, err
+	}
+	start, end := windows.Start, windows.End
 
 	stats, err := s.reportRepo.AggregateUserUsage(ctx, userID, start, end)
 	if err != nil {
 		return nil, err
 	}
-	if stats.Requests == 0 {
+	// 日报附节窗口：前一日切点后到当天 00:00。只取请求数用于阈值/展示，
+	// 素材在 buildSummaryPrompt 里单独拉取；失败不阻断主报告。
+	annexRequests := int64(0)
+	if reportType == domain.ReportTypeDaily && !windows.AnnexStart.IsZero() {
+		if annexStats, aerr := s.reportRepo.AggregateUserUsage(ctx, userID, windows.AnnexStart, windows.AnnexEnd); aerr == nil {
+			annexRequests = annexStats.Requests
+		} else {
+			logger.LegacyPrintf("service.report", "[Report] aggregate annex usage for user %d: %v", userID, aerr)
+		}
+		stats.AnnexRequests = annexRequests
+	}
+	if stats.Requests == 0 && annexRequests == 0 {
 		return nil, ErrReportGenerateUserNotFound
 	}
 	stats.Models = orEmptyCounts(stats.Models)
@@ -143,13 +239,9 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 		Status:      domain.ReportStatusDone,
 	}
 
-	cfg, err := s.GetReportConfig(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// 节假日感知关闭模式：定时日报仅对当日请求超过阈值的用户生成
-	if belowDailyMinRequests(reportType, trigger, cfg.SkipHolidays, stats.Requests) {
+	// 节假日感知关闭模式：定时日报仅对当日请求超过阈值的用户生成。
+	// 阈值为正文+附节合计：20:00 后才补够量的用户不应被跳过。
+	if belowDailyMinRequests(reportType, trigger, cfg.SkipHolidays, stats.Requests+annexRequests) {
 		return nil, ErrReportSkippedLowUsage
 	}
 
@@ -160,7 +252,7 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 	}
 	report.Username = username
 
-	summary, qualityWarnings, llmErr := s.buildSummary(ctx, cfg, reportType, start, end, userID, username, &stats)
+	summary, qualityWarnings, hasAnnex, llmErr := s.buildSummary(ctx, cfg, reportType, windows, userID, username, &stats)
 	if llmErr != nil {
 		if errors.Is(llmErr, domain.ErrReportLLMNotConfigured) {
 			// LLM 未配置：产出纯统计报告，不算失败
@@ -184,6 +276,12 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 			return s.persist(ctx, report)
 		}
 	}
+	// 正文 0 请求时，只有当附节真的有可读素材才保留这份报告；
+	// 避免为「只在 20:00 后用了几个请求、但没有任何 prompt 素材」的人生成空日报。
+	if stats.Requests == 0 && (!hasAnnex || strings.TrimSpace(summary) == "") {
+		return nil, ErrReportGenerateUserNotFound
+	}
+
 	if len(qualityWarnings) > 0 {
 		logger.LegacyPrintf("service.report",
 			"[Report] %s report for user %d generated with quality warnings: %s",
@@ -344,14 +442,38 @@ func (s *ReportService) GenerateForAllUsers(ctx context.Context, reportType stri
 	if s == nil || s.reportRepo == nil {
 		return 0, errors.New("report repository not initialized")
 	}
-	start, end, err := ReportPeriod(reportType, ref)
+	cfg, cfgErr := s.GetReportConfig(ctx)
+	if cfgErr != nil {
+		logger.LegacyPrintf("service.report", "[Report] load config for batch %s: %v", reportType, cfgErr)
+		cfg = defaultReportLLMConfig()
+	}
+	windows, err := resolveReportWindows(reportType, ref, cfg)
 	if err != nil {
 		return 0, err
 	}
 
-	userIDs, err := s.reportRepo.ListActiveUserIDs(ctx, start, end)
+	userIDs, err := s.reportRepo.ListActiveUserIDs(ctx, windows.Start, windows.End)
 	if err != nil {
 		return 0, err
+	}
+	// 日报：只在 20:00 后用过、正文窗口没量的人也要生成（附节承载其工作）。
+	if reportType == domain.ReportTypeDaily && !windows.AnnexStart.IsZero() {
+		annexIDs, aerr := s.reportRepo.ListActiveUserIDs(ctx, windows.AnnexStart, windows.AnnexEnd)
+		if aerr != nil {
+			logger.LegacyPrintf("service.report", "[Report] list annex-active users: %v", aerr)
+		} else if len(annexIDs) > 0 {
+			seen := make(map[int64]struct{}, len(userIDs)+len(annexIDs))
+			for _, uid := range userIDs {
+				seen[uid] = struct{}{}
+			}
+			for _, uid := range annexIDs {
+				if _, ok := seen[uid]; ok {
+					continue
+				}
+				seen[uid] = struct{}{}
+				userIDs = append(userIDs, uid)
+			}
+		}
 	}
 
 	generated := 0
@@ -448,27 +570,32 @@ func (s *ReportService) buildSummary(
 	ctx context.Context,
 	cfg *ReportLLMConfig,
 	reportType string,
-	start, end time.Time,
+	windows reportWindows,
 	userID int64,
 	username string,
 	stats *ReportStats,
-) (string, []string, error) {
-	userPrompt, hasGoal, err := s.buildSummaryPrompt(ctx, cfg, reportType, start, end, userID, stats)
+) (string, []string, bool, error) {
+	userPrompt, hasGoal, hasAnnex, err := s.buildSummaryPrompt(ctx, cfg, reportType, windows, userID, stats)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	if !reportLLMConfigured(cfg) {
-		return "", nil, domain.ErrReportLLMNotConfigured
+		return "", nil, hasAnnex, domain.ErrReportLLMNotConfigured
+	}
+
+	annexHeading := ""
+	if reportType == domain.ReportTypeDaily && hasAnnex && windows.AnnexLabel != "" {
+		annexHeading = "## 附：昨晚 " + windows.AnnexLabel + " 后补充"
 	}
 
 	llmCtx, cancel := context.WithTimeout(ctx, reportLLMTimeout)
 	defer cancel()
 
-	body, warnings, err := s.completeCheckedReport(llmCtx, cfg, reportSystemPrompt(reportType), userPrompt, reportType, hasGoal)
+	body, warnings, err := s.completeCheckedReport(llmCtx, cfg, reportSystemPrompt(reportType, annexHeading, windows.AnnexLabel), userPrompt, reportType, hasGoal, hasAnnex, annexHeading)
 	if err != nil {
-		return "", nil, err
+		return "", nil, hasAnnex, err
 	}
-	return reportTitle(reportType, start, username) + "\n\n" + body, warnings, nil
+	return reportTitle(reportType, windows.Start, username) + "\n\n" + body, warnings, hasAnnex, nil
 }
 
 func reportLLMConfigured(cfg *ReportLLMConfig) bool {
@@ -476,15 +603,19 @@ func reportLLMConfigured(cfg *ReportLLMConfig) bool {
 }
 
 // buildSummaryPrompt 组装注入 LLM 的 user prompt，并按 reportUserPromptMaxRunes
-// 做总量裁剪。hasGoal 表示日报上下文中注入了「用户近期目标」（决定是否要求第三节）。
+// 做正文总量裁剪；附节素材使用独立的 reportAnnexPromptMaxRunes 预算。
+// hasGoal 表示日报上下文中注入了「用户近期目标」（决定是否要求第三节）；
+// hasAnnex 表示前一日切点后确实有可读素材（决定是否要求附节）。
 func (s *ReportService) buildSummaryPrompt(
 	ctx context.Context,
 	cfg *ReportLLMConfig,
 	reportType string,
-	start, end time.Time,
+	windows reportWindows,
 	userID int64,
 	stats *ReportStats,
-) (string, bool, error) {
+) (string, bool, bool, error) {
+	start, end := windows.Start, windows.End
+
 	var fixed strings.Builder
 	fixed.WriteString(fmt.Sprintf("周期：%s ~ %s\n", start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04")))
 
@@ -517,26 +648,20 @@ func (s *ReportService) buildSummaryPrompt(
 	}
 
 	var items []string
-	var windows []string
+	var conversationWindows []string
 	var turnCount int
+	var annexItems []string
+	var annexWindows []string
+	hasAnnex := false
+
 	if !aggregated && reportLLMConfigured(cfg) {
-		turns, err := s.reportRepo.FetchUserTurns(ctx, userID, start, end, maxReportTurns)
-		if err == nil && len(turns) > 0 {
-			turnCount = len(turns)
-			stats.PromptCount = int64(len(turns))
-			items = collectUserTurns(turns, cfg.PromptTruncateChars)
-			// max_prompts 配置此前是死配置（一直用 maxReportTurns）：这里按"去重后
-			// 最多注入多少条有效提问"生效，超出时保留最近的条目。
-			if maxItems := cfg.MaxPrompts; maxItems > 0 && len(items) > maxItems {
-				items = items[len(items)-maxItems:]
-			}
-		}
-		// 智能体客户端（opencode 等）的用户输入混在会话历史深处，头部提取拿不到；
-		// 补充会话快照的对话区窗口采样，覆盖全周期工作脉络。
-		// 快照按 session 分组：每 session 取上下文最全的一条，最多 reportSnapshotCount 个。
-		snaps, serr := s.reportRepo.FetchPromptSnapshots(ctx, userID, start, end, reportSnapshotCount)
-		if serr == nil && len(snaps) > 0 {
-			windows = collectConversationWindows(snaps)
+		items, conversationWindows, turnCount = s.collectReportMaterials(ctx, cfg, userID, start, end, stats, true)
+
+		// 附节素材：前一日切点后到当天 00:00。独立预算，不挤占正文。
+		if reportType == domain.ReportTypeDaily && !windows.AnnexStart.IsZero() {
+			annexItems, annexWindows, _ = s.collectReportMaterials(ctx, cfg, userID, windows.AnnexStart, windows.AnnexEnd, nil, false)
+			annexItems, annexWindows = trimReportMaterials(annexItems, annexWindows, reportAnnexPromptMaxRunes)
+			hasAnnex = len(annexItems) > 0 || len(annexWindows) > 0
 		}
 	}
 
@@ -547,27 +672,30 @@ func (s *ReportService) buildSummaryPrompt(
 	statsBlock.WriteString(fmt.Sprintf("- 费用：%.4f\n", stats.TotalCost))
 	statsBlock.WriteString("- 模型分布：" + formatModelCounts(stats.Models) + "\n")
 	statsBlock.WriteString("- 活跃时段：" + formatHourly(stats.Hourly) + "\n")
+	if stats.AnnexRequests > 0 {
+		statsBlock.WriteString(fmt.Sprintf("- 另含前晚 %s 后请求：%d（仅用于文末附节，不并入上面的统计）\n", windows.AnnexLabel, stats.AnnexRequests))
+	}
 
-	// 总量预算：固定部分优先保留，剩余额度在「提问记录」与「对话片段」之间分配。
+	// 正文总量预算：固定部分优先保留，剩余额度在「提问记录」与「对话片段」之间分配。
 	// 超预算时从最早的一条开始丢（两者都按时间正序），保证最近的工作留下。
 	budget := reportUserPromptMaxRunes - runeLen(fixed.String()) - runeLen(aggregatedBlock.String()) - runeLen(statsBlock.String())
-	if budget < 0 {
-		budget = 0
-	}
-	for runeLen(strings.Join(items, ""))+runeLen(strings.Join(windows, "")) > budget {
-		if len(items) == 0 && len(windows) == 0 {
-			break
+	items, conversationWindows = trimReportMaterials(items, conversationWindows, budget)
+
+	var annexBlock strings.Builder
+	if hasAnnex {
+		annexBlock.WriteString(fmt.Sprintf("\n### 前一日 %s 后素材（仅用于文末附节，不要与今日工作混在一起；共 %d 次请求）\n", windows.AnnexLabel, stats.AnnexRequests))
+		if len(annexItems) > 0 {
+			annexBlock.WriteString(fmt.Sprintf("用户提问记录（去重后 %d 条，按时间正序）：\n", len(annexItems)))
+			for _, it := range annexItems {
+				annexBlock.WriteString(it + "\n")
+			}
 		}
-		// 交替裁剪，避免某一类素材被整体丢光。
-		if len(items) >= len(windows) && len(items) > 0 {
-			items = items[1:]
-			continue
+		if len(annexWindows) > 0 {
+			annexBlock.WriteString("对话记录片段（按时间排列，含用户输入/助手回复/工具输出）：\n")
+			for _, w := range annexWindows {
+				annexBlock.WriteString("- " + w + "\n")
+			}
 		}
-		if len(windows) > 0 {
-			windows = windows[1:]
-			continue
-		}
-		items = items[1:]
 	}
 
 	var b strings.Builder
@@ -579,14 +707,81 @@ func (s *ReportService) buildSummaryPrompt(
 			b.WriteString(it + "\n")
 		}
 	}
-	if len(windows) > 0 {
+	if len(conversationWindows) > 0 {
 		b.WriteString(fmt.Sprintf("\n### 对话记录片段（截取自最近 %d 个会话的「最新 + 中段」快照，尾部优先采样，按时间排列，含用户输入/助手回复/工具输出）\n", reportSnapshotCount))
-		for _, w := range windows {
+		for _, w := range conversationWindows {
 			b.WriteString("- " + w + "\n")
 		}
 	}
+	b.WriteString(annexBlock.String())
 	b.WriteString(statsBlock.String())
-	return b.String(), hasGoal, nil
+	return b.String(), hasGoal, hasAnnex, nil
+}
+
+// collectReportMaterials 拉取一个时间窗内的用户提问与对话窗口。
+// setPromptCount 为 true 时把提问条数写回 stats.PromptCount（正文素材口径）。
+func (s *ReportService) collectReportMaterials(
+	ctx context.Context,
+	cfg *ReportLLMConfig,
+	userID int64,
+	start, end time.Time,
+	stats *ReportStats,
+	setPromptCount bool,
+) (items []string, conversationWindows []string, turnCount int) {
+	truncateChars := 500
+	maxPrompts := 30
+	if cfg != nil {
+		if cfg.PromptTruncateChars > 0 {
+			truncateChars = cfg.PromptTruncateChars
+		}
+		if cfg.MaxPrompts > 0 {
+			maxPrompts = cfg.MaxPrompts
+		}
+	}
+
+	turns, err := s.reportRepo.FetchUserTurns(ctx, userID, start, end, maxReportTurns)
+	if err == nil && len(turns) > 0 {
+		turnCount = len(turns)
+		if setPromptCount && stats != nil {
+			stats.PromptCount = int64(len(turns))
+		}
+		items = collectUserTurns(turns, truncateChars)
+		// max_prompts 按"去重后最多注入多少条有效提问"生效，超出时保留最近的条目。
+		if maxPrompts > 0 && len(items) > maxPrompts {
+			items = items[len(items)-maxPrompts:]
+		}
+	}
+
+	// 智能体客户端（opencode 等）的用户输入混在会话历史深处，头部提取拿不到；
+	// 补充会话快照的对话区窗口采样，覆盖全周期工作脉络。
+	snaps, serr := s.reportRepo.FetchPromptSnapshots(ctx, userID, start, end, reportSnapshotCount)
+	if serr == nil && len(snaps) > 0 {
+		conversationWindows = collectConversationWindows(snaps)
+	}
+	return items, conversationWindows, turnCount
+}
+
+// trimReportMaterials 按预算从最早的一条开始丢素材，保留最近的工作。
+func trimReportMaterials(items, conversationWindows []string, budget int) ([]string, []string) {
+	if budget < 0 {
+		budget = 0
+	}
+	for runeLen(strings.Join(items, ""))+runeLen(strings.Join(conversationWindows, "")) > budget {
+		if len(items) == 0 && len(conversationWindows) == 0 {
+			break
+		}
+		// 交替裁剪，避免某一类素材被整体丢光。
+		if len(items) >= len(conversationWindows) && len(items) > 0 {
+			items = items[1:]
+			continue
+		}
+		if len(conversationWindows) > 0 {
+			conversationWindows = conversationWindows[1:]
+			continue
+		}
+		items = items[1:]
+	}
+	return items, conversationWindows
 }
 
 func runeLen(s string) int { return len([]rune(s)) }
@@ -599,13 +794,16 @@ func (s *ReportService) completeCheckedReport(
 	cfg *ReportLLMConfig,
 	systemPrompt, userPrompt, reportType string,
 	hasGoal bool,
+	hasAnnex bool,
+	annexHeading string,
 ) (string, []string, error) {
 	body, err := s.llm.ChatComplete(ctx, cfg, systemPrompt, userPrompt)
 	if err != nil {
 		return "", nil, err
 	}
 	body = sanitizeReportBody(body)
-	first := checkReportQuality(body, reportType, hasGoal)
+	body = normalizeReportAnnex(body, hasAnnex, annexHeading)
+	first := checkReportQuality(body, reportType, hasGoal, hasAnnex)
 	if len(first.Hard) == 0 {
 		// 软问题（条目数/过长/代码块/空泛措辞）只记日志，不打扰作者：
 		// 若软问题也打 ⚠️，多数正常报告都会带标记，徽标就失去意义了。
@@ -633,7 +831,8 @@ func (s *ReportService) completeCheckedReport(
 		return body, reportQualityWarningsList(first), nil
 	}
 	retried = sanitizeReportBody(retried)
-	second := checkReportQuality(retried, reportType, hasGoal)
+	retried = normalizeReportAnnex(retried, hasAnnex, annexHeading)
+	second := checkReportQuality(retried, reportType, hasGoal, hasAnnex)
 
 	best, bestResult := body, first
 	if second.Sensitive != first.Sensitive {
@@ -1178,7 +1377,7 @@ func (s *ReportService) appendSubReports(
 // reportSystemPrompt 按报告类型构造 system prompt，输出格式对齐团队日报/周报/月报
 // 模板（标题 + 两个小节：核心工作 + 计划，平铺编号条目，无分类/优先级标注）。
 // 标题由后端拼接，LLM 只输出两个小节正文。
-func reportSystemPrompt(reportType string) string {
+func reportSystemPrompt(reportType, annexHeading, annexLabel string) string {
 	var b strings.Builder
 	b.WriteString("你是团队 AI 网关的工作报告助手，根据用户在网关上的请求统计与 prompt 片段，推断该用户本周期做了什么，用简体中文输出 Markdown。\n\n")
 
@@ -1205,7 +1404,7 @@ func reportSystemPrompt(reportType string) string {
 		b.WriteString("## 二、下月工作计划\n")
 		b.WriteString("1. <从本月工作自然延伸的方向>（1-4 条）\n")
 	default:
-		b.WriteString("输出格式（日报。除下述小节外禁止输出标题或其他小节）：\n")
+		b.WriteString("输出格式（日报。除下述小节和文末附节外禁止输出标题或其他小节）：\n")
 		b.WriteString("## 一、今日核心工作\n")
 		b.WriteString("1. <今日工作项>（3-6 条，按重要性排序）\n\n")
 		b.WriteString("## 二、明日工作计划\n")
@@ -1214,6 +1413,12 @@ func reportSystemPrompt(reportType string) string {
 		b.WriteString("## 三、近期目标计划\n")
 		b.WriteString("1. <围绕用户近期目标拆解的具体推进项>（1-6 条；目标涉及多个项目时分别列出，每条一句话动词开头：完成/推进/启动/上线）\n")
 		b.WriteString("第三节条目必须来自用户目标与实际素材的结合：已在推进的目标写下一步推进安排，尚未开始的目标写启动计划；「今日核心工作」中与目标相关的工作可标注对目标的推进，「明日工作计划」不再重复目标内容。未提供「用户近期目标」时严禁输出第三节。\n")
+		if annexHeading != "" {
+			b.WriteString("\n若素材包含「前一日 " + annexLabel + " 后素材」且其中有实际工作，必须在全文最后追加附节（这是除一/二/三之外唯一允许的扩展小节，保留 ## 标题、不要编号）：\n")
+			b.WriteString(annexHeading + "\n")
+			b.WriteString("1. <昨晚切点后的工作项>（1-3 条，按重要性排序，每条 ≤30 字，动词开头）\n")
+			b.WriteString("附节只写「前一日切点后素材」中的实际工作，不重复「今日核心工作」，不写工具、模式、请求次数、token/费用等统计数字；没有有效素材时严禁输出该节，也不要写「无」「暂无」。\n")
+		}
 	}
 	return b.String()
 }
