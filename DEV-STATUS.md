@@ -484,7 +484,7 @@ docker compose up -d sub2api
 
 - 后端 `go build ./...`、`go vet`、`go test ./internal/service/...` 全绿；前端 `vue-tsc`、i18n 完整性测试通过
 - dev 33336 真实流量生成（admin 手动，user 7 / 2026-11-20）：请求 **38** 条（前晚 33 + 当天 5），与 `usage_logs` 24h 窗口一致；正文含前晚 `IdeaToDoc` 工作；**无 `## 附`、无 `annex_requests` 字段**；`pushed_at` 为空；验证后删除测试报告 855
-- 发布：备份 `sub2api:stable-backup-20261124-1522`（v4.3 stable）→ `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index `index-DUQ2agLp.js` 与 dev 一致
+- 发布：备份 `sub2api:stable-backup-20261124-1522`（v4.3 stable）→ `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index `index-DUQ2agLp.js` 与 dev 一致；commit `97d456534` 已 push fork
 - [ ] 2026-11-24 20:00 首个定时周期观察：日报生成、自动推送、卡片无附节、窗口为 11-23 20:00 ~ 11-24 20:00
 
 ### 后续迭代
