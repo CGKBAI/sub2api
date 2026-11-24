@@ -33,6 +33,10 @@ func (f *fakeReportGroupRepo) ListEnabledGroupsForUser(ctx context.Context, user
 	return f.groups, nil
 }
 
+func (f *fakeReportGroupRepo) ListGroups(ctx context.Context) ([]ReportFeishuGroup, error) {
+	return f.groups, nil
+}
+
 func (f *fakeReportGroupRepo) UpsertDelivery(ctx context.Context, d *ReportPushDelivery) error {
 	if d.AttemptedAt.IsZero() {
 		d.AttemptedAt = time.Now()

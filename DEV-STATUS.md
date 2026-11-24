@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-11-24（**v4.4 已发布 stable**：日报改为滚动 24 小时窗口 `[D-1 切点, D 切点)`，切点取 `DailySchedule` 时分（当前 20:00），前晚工作直接进「今日核心工作」，**取消 v4.3 附节**；v4.2 质量闭环保留。dev 启动冒烟、真实流量生成、后端 build/service 测试、前端 vue-tsc 全绿。发布备份 `sub2api:stable-backup-20261124-1522`，生产 33333 healthy、`/health` 200、前端 index hash 与 dev 一致，见 §8 v4.4）。
+> 本文档是完整项目上下文。最后更新：2026-11-24（**v4.5 已发布 stable**：新增报告生成/推送失败重试队列——LLM 瞬时失败每 30 分钟重试生成，飞书按报告×群重试失败投递，成功群/同一 webhook 不重发，永久错误标记「需人工修复」停止；v4.4 滚动 24h 窗口保留。发布备份 `sub2api:stable-backup-20261124-1735`，生产 33333 healthy、`/health` 200、前端 index `index-DUDskspr.js` 与 dev 一致，见 §8 v4.5）。
 
 ## 1. 功能与当前状态总览
 
@@ -20,6 +20,7 @@
 12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 dev 已验证，2026-11-24 随 v4.3 发布 stable）：①审计截断**按段分配预算**（最新用户消息 16k + 尾部块 + 1.5k 系统提示词，静态技能清单丢弃），不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③**每 session 取「最新 + 中段」两条快照**，补回被截断丢掉的中段；④生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；⑤推送幂等：已推送过的周期不再自动重复推；⑥新增 `user_text` 列，救回此前静默丢失的 8.1% 用户提问；⑦窗口降噪：按内容特征给窗口打分，先把预算让给干净窗口。见 §8 v4.2
 13. ⏪ **日报附节「昨晚 20:00 后补充」v4.3**（2026-11-24 曾发布 stable，同日被 v4.4 取代）：20:00–24:00 的工作写进次日日报末尾附节；因群消息冗余，v4.4 改为滚动 24 小时窗口，附节取消。见 §8 v4.3（历史）
 14. ✅ **日报滚动 24h 窗口 v4.4**（2026-11-24 已发布 stable）：日报覆盖 `[D-1 切点, D 切点)`，切点取 `DailySchedule` 时分（当前 20:00）；前晚工作直接进「今日核心工作」，**不再有附节/`annex_requests`**；统计、活跃用户、请求阈值统一用该 24h 窗口；`period_start` 保持 D 00:00（唯一键/日期筛选不变）、`period_end` 为 D 切点；见 §8 v4.4
+15. ✅ **报告生成/推送失败重试 v4.5**（2026-11-24 已发布 stable）：LLM 瞬时失败每 30 分钟重试生成（定时成功后自动推、手动只更新 Web）；飞书按「报告×群」重试失败投递，已成功群/同一 webhook 不重发；有旧成功报告时保留旧报告、只补推漏掉的群；永久错误（401/403/404、key/模型/webhook 配置）标记「需人工修复」并停止重试；见 §8 v4.5
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -176,6 +177,10 @@ docker compose up -d sub2api
 
 **日报滚动 24h 窗口（v4.4，2026-11-24 发布）**：
 - 修改：`service/report_service.go`（`reportWindows` 改为数据窗口 + 报告日期四字段、`reportDailyWindow` 返回 `[D-1 切点,D 切点)`、`GenerateReport`/`GenerateForAllUsers` 单窗口、`buildSummaryPrompt` 去掉附节素材、`reportSystemPrompt` 加“跨自然日、所有工作归入今日核心工作、不要附节”指令）、`service/report_quality.go`（删除附节校验，保留 `stripReportAnnex` 防御旧摘要/模型漂移）、`domain/report.go`（删除 `AnnexRequests`）、前端 `api/admin/reports.ts`（删 `annex_requests`）、`views/{admin,user}/ReportsView.vue`（删附节统计行）、i18n zh/en（删 `annexRequests`、`scheduleHint` 改为滚动窗口说明）、`service/report_daily_window_test.go`（由 v4.3 测试改写为滚动窗口测试）
+
+**报告生成/推送失败重试（v4.5，2026-11-24 发布）**：
+- 新增：`migrations/252_report_retry_tasks.sql`（纯增量）、`domain/report_retry.go`、`repository/report_retry_repo.go`、`service/report_retry_scheduler.go`、`service/report_retry_test.go`
+- 修改：`service/report_service.go`（LLM 失败写生成重试任务、`autoPush` 语义、旧报告保留后补推漏群、`NewReportServiceWithRetry`）、`service/report_feishu_group.go`（`pushReportToMissingGroups`/`pushReportToGroup`、按群重试、同 webhook 去重、`schedulePushRetry`）、`service/report_llm.go`/`service/report_feishu.go`（typed error + 永久/瞬时分类）、`service/report.go`（`ReportRetryRepository` 接口）、`domain/report.go`（Report/Delivery 重试展示字段）、`handler/dto/report.go`、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（生成/推送重试徽标）、i18n zh/en `retry.*`、wire provider/cleanup（重试调度器）
 
 **修改官方文件（挂载点）**：`config.go`（ReportConfig）、`handler.go|handler/wire.go`、`service/wire.go`、`repository/wire.go`、`routes/admin.go|user.go`、`cmd/server/wire.go`（cleanup）、`domain_constants.go`（SettingKeyReportConfig）、router/index.ts、AppSidebar.vue（ReportIcon）、i18n common.ts nav + admin/index.ts ×2、go.mod/go.sum（wire cmd indirect）
 
@@ -486,6 +491,35 @@ docker compose up -d sub2api
 - dev 33336 真实流量生成（admin 手动，user 7 / 2026-11-20）：请求 **38** 条（前晚 33 + 当天 5），与 `usage_logs` 24h 窗口一致；正文含前晚 `IdeaToDoc` 工作；**无 `## 附`、无 `annex_requests` 字段**；`pushed_at` 为空；验证后删除测试报告 855
 - 发布：备份 `sub2api:stable-backup-20261124-1522`（v4.3 stable）→ `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index `index-DUQ2agLp.js` 与 dev 一致；commit `97d456534` 已 push fork
 - [ ] 2026-11-24 20:00 首个定时周期观察：日报生成、自动推送、卡片无附节、窗口为 11-23 20:00 ~ 11-24 20:00
+
+### v4.5：报告生成/推送失败重试（2026-11-24 已发布 stable）
+
+> 背景：LLM 瞬时失败会导致部分用户没有日报/推送，只能人工生成再手动推；飞书推送失败也没有自动重试。用户确认规则：生成和推送失败都 30 分钟重试；有旧报告保留；已成功的人/群不重复；永久错误标记「需人工修复」并停止。
+
+**规则**
+
+- **生成失败，无旧报告**：写 `failed` 报告 + 生成重试任务，每 30 分钟重试；定时成功后自动推，手动成功后只更新 Web。
+- **生成失败，已有成功旧报告**：保留旧报告，不重新生成；定时报告把旧报告补推到还没成功的群；已成功的群/同一 webhook 跳过。
+- **推送失败**：按「报告×群」重试，每 30 分钟一次；已成功群和同一 webhook 不重发；全部群成功才写 `pushed_at`。
+- **手动推送失败**：仍不自动重试（沿用“手动按钮”语义），只落失败记录。
+- **永久错误**：LLM `400/401/403/404/422`、飞书 `4xx`/业务码（`9499` 限流除外）→ `manual_repair`，停止重试；网络超时、`429`、`5xx` 继续重试。
+- 生成重试任务成功后，若用户/类型开关关闭或无群组，则不再推送。
+
+**实现**
+
+- 迁移 `252_report_retry_tasks.sql`：新表 `report_retry_tasks`，`kind=generation|push`，`status=pending|manual_repair|done`，`next_retry_at`，部分唯一索引保证同一用户周期/同一报告群只有一个未结束任务。
+- `ReportRetrySchedulerService`：每分钟扫描到期任务，失败后 `next_retry_at=now+30min`；Redis leader lock；受 `REPORT_SCHEDULER_ENABLED` 控制（dev 不跑）。
+- LLM/飞书错误改为 typed error：`reportLLMCallError`、`reportFeishuError`，保留 HTTP/业务码用于永久/瞬时分类。
+- 推送按群重试：`pushReportToMissingGroups`（自动推送只补缺失群）、`pushReportToGroup`（单群重试）；同一 webhook 已成功则只标记该群成功，不重复发卡片。
+- 前端报告卡片：新增「生成重试中/生成需人工修复」徽标；推送失败 tooltip 显示「推送重试中/需人工修复」。
+
+**验证与发布（2026-11-24）**
+
+- `go build ./...`、`go vet`、`go test ./internal/service/...` 全绿；前端 `vue-tsc`、i18n 完整性测试通过。
+- dev 33336 启动执行迁移 252，`report_retry_tasks` 表/索引/约束正确；手工事务验证 generation/push UPSERT 与部分唯一索引。
+- 临时插入 generation/push 任务，admin 报告列表正确返回 `generation_retry_status`/`retry_status`；验证后删除，表恢复为空。
+- 发布：备份 `sub2api:stable-backup-20261124-1735`（v4.4 stable）→ `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index `index-DUDskspr.js` 与 dev 一致；生产日志出现 `[ReportRetry] scheduler started (tick=1m, retry_interval=30m)`。
+- [ ] 首次真实 LLM/飞书失败后观察 30 分钟重试、部分群补发、永久错误 `manual_repair` 停止。
 
 ### 后续迭代
 

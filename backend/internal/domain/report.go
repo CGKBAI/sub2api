@@ -62,6 +62,9 @@ type ReportPushDelivery struct {
 	Error        string
 	AttemptedAt  time.Time
 	AttemptCount int
+	// 推送重试状态（由 report_retry_tasks 补齐）：pending/manual_repair/空
+	RetryStatus string
+	NextRetryAt *time.Time
 }
 
 // ReportStats 是 reports.stats 列的 JSON 结构：一个周期内的聚合统计。
@@ -103,8 +106,12 @@ type Report struct {
 	QualityWarnings string
 	// PushDeliveries 报告×群组最近一次投递结果（列表/详情展示用，由服务层批量补齐）
 	PushDeliveries []ReportPushDelivery
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// 生成重试状态（由 report_retry_tasks 补齐）：pending/manual_repair/空
+	GenerationRetryStatus string
+	GenerationRetryAt     *time.Time
+	GenerationRetryError  string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // IsWeekly 报告是否为周报。

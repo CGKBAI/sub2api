@@ -44,6 +44,9 @@ export interface Report {
   last_push_error?: string
   quality_warnings?: string
   push_deliveries?: ReportPushDelivery[]
+  generation_retry_status?: 'pending' | 'manual_repair'
+  generation_retry_at?: string
+  generation_retry_error?: string
   created_at: string
   updated_at: string
 }
@@ -55,6 +58,8 @@ export interface ReportPushDelivery {
   error?: string
   attempted_at: string
   attempt_count: number
+  retry_status?: 'pending' | 'manual_repair'
+  next_retry_at?: string
 }
 
 export interface ReportFeishuGroup {

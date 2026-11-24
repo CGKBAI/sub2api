@@ -25,18 +25,24 @@ type Report struct {
 	QualityWarnings string `json:"quality_warnings,omitempty"`
 	// PushDeliveries 报告×群组最近一次投递结果（多群推送）
 	PushDeliveries []ReportPushDelivery `json:"push_deliveries,omitempty"`
-	CreatedAt      time.Time            `json:"created_at"`
-	UpdatedAt      time.Time            `json:"updated_at"`
+	// 生成失败重试状态：pending=30 分钟重试中；manual_repair=需人工修复
+	GenerationRetryStatus string     `json:"generation_retry_status,omitempty"`
+	GenerationRetryAt     *time.Time `json:"generation_retry_at,omitempty"`
+	GenerationRetryError  string     `json:"generation_retry_error,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
 // ReportPushDelivery 是报告在某一个飞书群的投递结果。
 type ReportPushDelivery struct {
-	GroupID      int64     `json:"group_id"`
-	GroupName    string    `json:"group_name"`
-	Status       string    `json:"status"`
-	Error        string    `json:"error,omitempty"`
-	AttemptedAt  time.Time `json:"attempted_at"`
-	AttemptCount int       `json:"attempt_count"`
+	GroupID      int64      `json:"group_id"`
+	GroupName    string     `json:"group_name"`
+	Status       string     `json:"status"`
+	Error        string     `json:"error,omitempty"`
+	AttemptedAt  time.Time  `json:"attempted_at"`
+	AttemptCount int        `json:"attempt_count"`
+	RetryStatus  string     `json:"retry_status,omitempty"`
+	NextRetryAt  *time.Time `json:"next_retry_at,omitempty"`
 }
 
 // ReportFromService 从服务层实体转换。
@@ -45,22 +51,25 @@ func ReportFromService(r *service.Report) *Report {
 		return nil
 	}
 	return &Report{
-		ID:              r.ID,
-		UserID:          r.UserID,
-		Username:        r.Username,
-		Type:            r.Type,
-		PeriodStart:     r.PeriodStart,
-		PeriodEnd:       r.PeriodEnd,
-		Stats:           r.Stats,
-		AISummary:       r.AISummary,
-		Status:          r.Status,
-		Error:           r.Error,
-		PushedAt:        r.PushedAt,
-		LastPushError:   r.LastPushError,
-		QualityWarnings: r.QualityWarnings,
-		PushDeliveries:  reportDeliveriesFromService(r.PushDeliveries),
-		CreatedAt:       r.CreatedAt,
-		UpdatedAt:       r.UpdatedAt,
+		ID:                    r.ID,
+		UserID:                r.UserID,
+		Username:              r.Username,
+		Type:                  r.Type,
+		PeriodStart:           r.PeriodStart,
+		PeriodEnd:             r.PeriodEnd,
+		Stats:                 r.Stats,
+		AISummary:             r.AISummary,
+		Status:                r.Status,
+		Error:                 r.Error,
+		PushedAt:              r.PushedAt,
+		LastPushError:         r.LastPushError,
+		QualityWarnings:       r.QualityWarnings,
+		PushDeliveries:        reportDeliveriesFromService(r.PushDeliveries),
+		GenerationRetryStatus: r.GenerationRetryStatus,
+		GenerationRetryAt:     r.GenerationRetryAt,
+		GenerationRetryError:  r.GenerationRetryError,
+		CreatedAt:             r.CreatedAt,
+		UpdatedAt:             r.UpdatedAt,
 	}
 }
 
@@ -77,6 +86,8 @@ func reportDeliveriesFromService(items []service.ReportPushDelivery) []ReportPus
 			Error:        d.Error,
 			AttemptedAt:  d.AttemptedAt,
 			AttemptCount: d.AttemptCount,
+			RetryStatus:  d.RetryStatus,
+			NextRetryAt:  d.NextRetryAt,
 		})
 	}
 	return out

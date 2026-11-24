@@ -62,16 +62,23 @@ const (
 type ReportService struct {
 	reportRepo  ReportRepository
 	groupRepo   ReportGroupRepository
+	retryRepo   ReportRetryRepository
 	settingRepo SettingRepository
 	llm         *reportLLMClient
 	feishu      *reportFeishuClient
 }
 
-// NewReportService 构造报告服务。
+// NewReportService 构造报告服务（兼容测试/旧调用，不含重试队列）。
 func NewReportService(reportRepo ReportRepository, groupRepo ReportGroupRepository, settingRepo SettingRepository) *ReportService {
+	return NewReportServiceWithRetry(reportRepo, groupRepo, nil, settingRepo)
+}
+
+// NewReportServiceWithRetry 构造包含重试队列的报告服务（wire 使用）。
+func NewReportServiceWithRetry(reportRepo ReportRepository, groupRepo ReportGroupRepository, retryRepo ReportRetryRepository, settingRepo SettingRepository) *ReportService {
 	return &ReportService{
 		reportRepo:  reportRepo,
 		groupRepo:   groupRepo,
+		retryRepo:   retryRepo,
 		settingRepo: settingRepo,
 		llm: &reportLLMClient{
 			httpClient: &http.Client{Timeout: reportLLMTimeout + 10*time.Second},
@@ -235,6 +242,8 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 	report.Username = username
 
 	summary, qualityWarnings, llmErr := s.buildSummary(ctx, cfg, reportType, windows, userID, username, &stats)
+	// 定时生成（且未被抑制）重试成功后要自动推送；手动生成不自动推。
+	autoPush := trigger == ReportTriggerScheduled && !suppressAutoPush
 	if llmErr != nil {
 		if errors.Is(llmErr, domain.ErrReportLLMNotConfigured) {
 			// LLM 未配置：产出纯统计报告，不算失败
@@ -242,12 +251,18 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 			qualityWarnings = nil
 		} else {
 			// LLM 失败：若该周期已有生成成功的报告（含摘要），保留旧报告不覆盖，
-			// 避免定时重试/手动重生成偶发失败摧毁原有成果
+			// 避免定时重试/手动重生成偶发失败摧毁原有成果。
 			existing, gErr := s.reportRepo.GetByUserPeriod(ctx, userID, reportType, windows.ReportStart)
 			if gErr == nil && existing != nil && existing.Status == domain.ReportStatusDone && strings.TrimSpace(existing.AISummary) != "" {
 				logger.LegacyPrintf("service.report",
 					"[Report] generate %s report for user %d failed but existing done report preserved: %v",
 					reportType, userID, llmErr)
+				s.clearGenerationRetry(ctx, userID, reportType, windows.ReportStart)
+				// 旧报告尚未推送成功时，直接补推旧报告到还没成功的群；
+				// 已推送过的个人/群不会重复收到。
+				if autoPush {
+					s.maybeAutoPushFeishu(ctx, cfg, existing)
+				}
 				return existing, nil
 			}
 			report.Status = domain.ReportStatusFailed
@@ -255,7 +270,12 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 			report.AISummary = ""
 			report.QualityWarnings = ""
 			report.Stats = stats
-			return s.persist(ctx, report)
+			saved, pErr := s.persist(ctx, report)
+			if pErr != nil {
+				return nil, pErr
+			}
+			s.scheduleGenerationRetry(ctx, saved, llmErr, autoPush)
+			return saved, nil
 		}
 	}
 	if len(qualityWarnings) > 0 {
@@ -271,12 +291,57 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 	if err != nil {
 		return nil, err
 	}
+	s.clearGenerationRetry(ctx, userID, reportType, windows.ReportStart)
 	// 仅定时生成自动推飞书；手动生成只在 web 展示，由卡片按钮手动推送。
-	// suppressAutoPush：周报/月报发布日抑制日报自动推送（调度器传入），防群消息刷屏
-	if trigger == ReportTriggerScheduled && !suppressAutoPush {
+	if autoPush {
 		s.maybeAutoPushFeishu(ctx, cfg, saved)
 	}
 	return saved, nil
+}
+
+// scheduleGenerationRetry 把 LLM 生成失败写入 30 分钟重试队列。
+// 永久性错误（401/403/404、key/模型配置错误）直接标记 manual_repair，停止重试。
+func (s *ReportService) scheduleGenerationRetry(ctx context.Context, report *Report, llmErr error, autoPush bool) {
+	if s == nil || s.retryRepo == nil || report == nil || report.ID <= 0 {
+		return
+	}
+	permanent := reportLLMErrorPermanent(llmErr)
+	status := domain.ReportRetryStatusPending
+	var next *time.Time
+	if permanent {
+		status = domain.ReportRetryStatusManualRepair
+	} else {
+		t := timezone.Now().Add(reportRetryInterval)
+		next = &t
+	}
+	task := &ReportRetryTask{
+		Kind:        domain.ReportRetryKindGeneration,
+		ReportID:    report.ID,
+		UserID:      report.UserID,
+		ReportType:  report.Type,
+		PeriodStart: report.PeriodStart,
+		AutoPush:    autoPush,
+		Status:      status,
+		LastError:   truncateReportError(llmErr.Error()),
+		NextRetryAt: next,
+	}
+	rctx, cancel := context.WithTimeout(context.Background(), reportFeishuDeliveryTimeout)
+	defer cancel()
+	if _, err := s.retryRepo.UpsertGeneration(rctx, task); err != nil {
+		logger.LegacyPrintf("service.report", "[ReportRetry] schedule generation retry report=%d user=%d: %v", report.ID, report.UserID, err)
+	}
+}
+
+// clearGenerationRetry 结束该周期的生成重试任务（生成成功/保留旧报告时）。
+func (s *ReportService) clearGenerationRetry(ctx context.Context, userID int64, reportType string, periodStart time.Time) {
+	if s == nil || s.retryRepo == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.Background(), reportFeishuDeliveryTimeout)
+	defer cancel()
+	if err := s.retryRepo.MarkDoneByGeneration(rctx, userID, reportType, periodStart); err != nil {
+		logger.LegacyPrintf("service.report", "[ReportRetry] clear generation retry user=%d type=%s: %v", userID, reportType, err)
+	}
 }
 
 // maybeAutoPushFeishu 定时生成成功后的飞书自动推送（手动生成不经过此路径）
@@ -325,7 +390,7 @@ func (s *ReportService) maybeAutoPushFeishu(ctx context.Context, cfg *ReportLLMC
 	if !optIn {
 		return
 	}
-	s.pushReportToUserGroups(ctx, cfg, report)
+	s.pushReportToMissingGroups(ctx, cfg, report)
 }
 
 // markPushResult 持久化推送结果（成功写 pushed_at，失败记 last_push_error）。
@@ -465,7 +530,8 @@ func (s *ReportService) GetReport(ctx context.Context, id int64) (*Report, error
 	if item != nil {
 		items := []Report{*item}
 		s.attachDeliveries(ctx, items)
-		item.PushDeliveries = items[0].PushDeliveries
+		s.attachRetries(ctx, items)
+		*item = items[0]
 	}
 	return item, nil
 }
@@ -483,6 +549,7 @@ func (s *ReportService) ListReports(ctx context.Context, params pagination.Pagin
 		return nil, nil, err
 	}
 	s.attachDeliveries(ctx, items)
+	s.attachRetries(ctx, items)
 	return items, pageInfo, nil
 }
 

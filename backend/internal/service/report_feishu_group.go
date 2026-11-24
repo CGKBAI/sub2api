@@ -20,6 +20,8 @@ const (
 	reportFeishuPushConcurrency = 4
 	// reportFeishuDeliveryTimeout 投递结果落库超时（best-effort，独立于推送 ctx）。
 	reportFeishuDeliveryTimeout = 5 * time.Second
+	// reportRetryInterval 生成/推送失败后的重试间隔。
+	reportRetryInterval = 30 * time.Minute
 )
 
 // ListFeishuGroups 列出全部报告群组（管理端）。
@@ -192,6 +194,19 @@ func uniqueIDs(ids []int64) []int64 {
 // 群之间相互隔离，单个群失败不影响其他群。返回 (成功群数, 失败群数, 汇总错误)。
 // 推送结果会写入 reports（全成功才更新 pushed_at）与 report_feishu_deliveries。
 func (s *ReportService) pushReportToUserGroups(ctx context.Context, cfg *ReportLLMConfig, report *Report) (int, int, error) {
+	return s.pushReportToGroups(ctx, cfg, report, false, false)
+}
+
+// pushReportToMissingGroups 只投递还没成功的群（自动推送/自动重试用）。
+func (s *ReportService) pushReportToMissingGroups(ctx context.Context, cfg *ReportLLMConfig, report *Report) (int, int, error) {
+	return s.pushReportToGroups(ctx, cfg, report, true, true)
+}
+
+// pushReportToGroups 投递报告到用户所属的启用群组。
+//   - onlyMissing=true：跳过已成功投递的群，以及同一 webhook 已成功的其他群；
+//   - autoRetry=true：失败的群写入 30 分钟重试队列；
+//   - autoRetry=false：手动推送，失败只记录，不自动重试。
+func (s *ReportService) pushReportToGroups(ctx context.Context, cfg *ReportLLMConfig, report *Report, onlyMissing, autoRetry bool) (int, int, error) {
 	if s == nil || s.groupRepo == nil || s.feishu == nil || cfg == nil || report == nil {
 		return 0, 0, nil
 	}
@@ -204,8 +219,41 @@ func (s *ReportService) pushReportToUserGroups(ctx context.Context, cfg *ReportL
 		logger.LegacyPrintf("service.report", "[ReportFeishu] user %d has no enabled report groups, skip push", report.UserID)
 		return 0, 0, nil
 	}
-	// 本次推送结果覆盖旧值，避免手动重推时 DTO 里出现重复的群记录
-	report.PushDeliveries = nil
+	if !onlyMissing {
+		// 手动重推覆盖旧 DTO，避免前端出现重复的群记录
+		report.PushDeliveries = nil
+	}
+
+	// onlyMissing：先看已有的成功投递，成功的群和同一 webhook 的群都不再发。
+	successGroupIDs := map[int64]struct{}{}
+	successWebhooks := map[string]struct{}{}
+	if onlyMissing {
+		allGroups, gerr := s.groupRepo.ListGroups(ctx)
+		if gerr != nil {
+			logger.LegacyPrintf("service.report", "[ReportFeishu] list groups for dedupe: %v", gerr)
+			return 0, 0, gerr
+		}
+		groupByID := make(map[int64]ReportFeishuGroup, len(allGroups))
+		for _, g := range allGroups {
+			groupByID[g.ID] = g
+		}
+		deliveries, derr := s.groupRepo.ListDeliveriesByReportIDs(ctx, []int64{report.ID})
+		if derr != nil {
+			logger.LegacyPrintf("service.report", "[ReportFeishu] list deliveries for report %d: %v", report.ID, derr)
+			return 0, 0, derr
+		}
+		for _, d := range deliveries[report.ID] {
+			if d.Status != domain.ReportPushStatusSuccess {
+				continue
+			}
+			successGroupIDs[d.GroupID] = struct{}{}
+			if g, ok := groupByID[d.GroupID]; ok {
+				if url := strings.TrimSpace(g.WebhookURL); url != "" {
+					successWebhooks[url] = struct{}{}
+				}
+			}
+		}
+	}
 
 	type target struct {
 		url    string
@@ -219,9 +267,22 @@ func (s *ReportService) pushReportToUserGroups(ctx context.Context, cfg *ReportL
 	failures := make([]string, 0, len(groups))
 	for _, g := range groups {
 		url := strings.TrimSpace(g.WebhookURL)
+		if _, ok := successGroupIDs[g.ID]; ok {
+			continue
+		}
+		if onlyMissing {
+			if _, ok := successWebhooks[url]; ok && url != "" {
+				// 同一个 webhook（同一个群）已经成功过：不再重发，但把该群标记成功。
+				d := s.recordDelivery(report.ID, g, nil)
+				report.PushDeliveries = append(report.PushDeliveries, d)
+				s.markPushTaskDone(report.ID, g.ID)
+				success++
+				continue
+			}
+		}
 		if url == "" {
 			// 没有 webhook 的群直接失败落库，避免整次推送被一个坏配置拖垮
-			d := s.recordDelivery(report.ID, g, domain.ErrReportFeishuNotConfigured)
+			d := s.recordDeliveryWithRetry(report, g, domain.ErrReportFeishuNotConfigured, autoRetry)
 			report.PushDeliveries = append(report.PushDeliveries, d)
 			failed++
 			failures = append(failures, fmt.Sprintf("%s（%s）", g.Name, domain.ErrReportFeishuNotConfigured.Error()))
@@ -232,6 +293,17 @@ func (s *ReportService) pushReportToUserGroups(ctx context.Context, cfg *ReportL
 			order = append(order, url)
 		}
 		buckets[url].groups = append(buckets[url].groups, g)
+	}
+
+	if len(order) == 0 {
+		if failed == 0 {
+			s.markPushResult(report, nil)
+			return success, 0, nil
+		}
+		aggErr := fmt.Errorf("%w: %d groups failed: %s",
+			domain.ErrReportFeishuPushFailed, failed, strings.Join(failures, "；"))
+		s.markPushResult(report, aggErr)
+		return success, failed, aggErr
 	}
 
 	pushCtx, cancel := context.WithTimeout(ctx, reportFeishuMultiPushTimeout)
@@ -270,7 +342,7 @@ func (s *ReportService) pushReportToUserGroups(ctx context.Context, cfg *ReportL
 
 	for res := range results {
 		for _, g := range res.target.groups {
-			d := s.recordDelivery(report.ID, g, res.err)
+			d := s.recordDeliveryWithRetry(report, g, res.err, autoRetry)
 			report.PushDeliveries = append(report.PushDeliveries, d)
 			if res.err != nil {
 				failed++
@@ -289,6 +361,29 @@ func (s *ReportService) pushReportToUserGroups(ctx context.Context, cfg *ReportL
 		domain.ErrReportFeishuPushFailed, failed, success+failed, strings.Join(failures, "；"))
 	s.markPushResult(report, aggErr)
 	return success, failed, aggErr
+}
+
+// pushReportToGroup 重试单个群。autoRetry=true 时失败继续排 30 分钟后的重试。
+func (s *ReportService) pushReportToGroup(ctx context.Context, cfg *ReportLLMConfig, report *Report, g ReportFeishuGroup, autoRetry bool) error {
+	if s == nil || s.feishu == nil || cfg == nil || report == nil || g.ID <= 0 {
+		return nil
+	}
+	url := strings.TrimSpace(g.WebhookURL)
+	if url == "" {
+		s.recordDeliveryWithRetry(report, g, domain.ErrReportFeishuNotConfigured, autoRetry)
+		s.refreshReportPushState(ctx, report)
+		return domain.ErrReportFeishuNotConfigured
+	}
+	cfgClone := *cfg
+	cfgClone.FeishuEnabled = true
+	cfgClone.FeishuWebhookURL = url
+	cfgClone.FeishuSecret = g.Secret
+	pushCtx, cancel := context.WithTimeout(ctx, reportFeishuPushTimeout)
+	defer cancel()
+	err := s.feishu.PushReportCard(pushCtx, &cfgClone, report)
+	s.recordDeliveryWithRetry(report, g, err, autoRetry)
+	s.refreshReportPushState(ctx, report)
+	return err
 }
 
 // recordDelivery 写入单个群组的投递结果（独立 Background ctx，避免推送 ctx 取消丢状态）。
@@ -310,6 +405,139 @@ func (s *ReportService) recordDelivery(reportID int64, g ReportFeishuGroup, push
 		logger.LegacyPrintf("service.report", "[ReportFeishu] record delivery report=%d group=%d: %v", reportID, g.ID, err)
 	}
 	return d
+}
+
+// recordDeliveryWithRetry 记录投递结果，并在失败时写入/推进重试任务。
+func (s *ReportService) recordDeliveryWithRetry(report *Report, g ReportFeishuGroup, pushErr error, autoRetry bool) ReportPushDelivery {
+	d := s.recordDelivery(report.ID, g, pushErr)
+	if pushErr == nil {
+		s.markPushTaskDone(report.ID, g.ID)
+		return d
+	}
+	if autoRetry {
+		s.schedulePushRetry(report, g, pushErr)
+	}
+	return d
+}
+
+// schedulePushRetry 把失败群写入 30 分钟重试队列；永久错误直接标记需人工修复。
+func (s *ReportService) schedulePushRetry(report *Report, g ReportFeishuGroup, pushErr error) {
+	if s == nil || s.retryRepo == nil || report == nil || g.ID <= 0 {
+		return
+	}
+	permanent := reportFeishuErrorPermanent(pushErr) || errors.Is(pushErr, domain.ErrReportFeishuNotConfigured)
+	status := domain.ReportRetryStatusPending
+	var next *time.Time
+	if permanent {
+		status = domain.ReportRetryStatusManualRepair
+	} else {
+		t := timezone.Now().Add(reportRetryInterval)
+		next = &t
+	}
+	task := &ReportRetryTask{
+		Kind:        domain.ReportRetryKindPush,
+		ReportID:    report.ID,
+		UserID:      report.UserID,
+		ReportType:  report.Type,
+		PeriodStart: report.PeriodStart,
+		GroupID:     g.ID,
+		Status:      status,
+		LastError:   truncateReportError(pushErr.Error()),
+		NextRetryAt: next,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reportFeishuDeliveryTimeout)
+	defer cancel()
+	if _, err := s.retryRepo.UpsertPush(ctx, task); err != nil {
+		logger.LegacyPrintf("service.report", "[ReportFeishu] schedule push retry report=%d group=%d: %v", report.ID, g.ID, err)
+	}
+}
+
+func (s *ReportService) markPushTaskDone(reportID, groupID int64) {
+	if s == nil || s.retryRepo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reportFeishuDeliveryTimeout)
+	defer cancel()
+	if err := s.retryRepo.MarkDoneByPush(ctx, reportID, groupID); err != nil {
+		logger.LegacyPrintf("service.report", "[ReportFeishu] mark push retry done report=%d group=%d: %v", reportID, groupID, err)
+	}
+}
+
+// refreshReportPushState 根据全部群投递结果更新 reports.pushed_at / last_push_error。
+func (s *ReportService) refreshReportPushState(ctx context.Context, report *Report) {
+	if s == nil || s.groupRepo == nil || report == nil || report.ID <= 0 {
+		return
+	}
+	deliveries, err := s.groupRepo.ListDeliveriesByReportIDs(ctx, []int64{report.ID})
+	if err != nil {
+		return
+	}
+	list := deliveries[report.ID]
+	if len(list) == 0 {
+		return
+	}
+	failures := make([]string, 0, len(list))
+	for _, d := range list {
+		if d.Status != domain.ReportPushStatusSuccess {
+			failures = append(failures, fmt.Sprintf("%s（%s）", d.GroupName, d.Error))
+		}
+	}
+	if len(failures) == 0 {
+		s.markPushResult(report, nil)
+		return
+	}
+	aggErr := fmt.Errorf("%w: %d/%d groups failed: %s",
+		domain.ErrReportFeishuPushFailed, len(failures), len(list), strings.Join(failures, "；"))
+	s.markPushResult(report, aggErr)
+}
+
+// attachRetries 批量补齐报告/群投递的重试状态（列表/详情共用，避免 N+1）。
+// 生成任务挂到 Report；推送任务按 report_id+group_id 挂到对应 Delivery。
+func (s *ReportService) attachRetries(ctx context.Context, items []Report) {
+	if s == nil || s.retryRepo == nil || len(items) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(items))
+	for i := range items {
+		if items[i].ID > 0 {
+			ids = append(ids, items[i].ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	tasks, err := s.retryRepo.ListActiveByReportIDs(ctx, ids)
+	if err != nil {
+		logger.LegacyPrintf("service.report", "[ReportRetry] list active retry tasks: %v", err)
+		return
+	}
+	for i := range items {
+		list := tasks[items[i].ID]
+		if len(list) == 0 {
+			continue
+		}
+		for _, t := range list {
+			switch t.Kind {
+			case domain.ReportRetryKindGeneration:
+				if items[i].GenerationRetryStatus != domain.ReportRetryStatusManualRepair {
+					items[i].GenerationRetryStatus = t.Status
+					items[i].GenerationRetryAt = t.NextRetryAt
+					items[i].GenerationRetryError = t.LastError
+				}
+			case domain.ReportRetryKindPush:
+				for j := range items[i].PushDeliveries {
+					if items[i].PushDeliveries[j].GroupID != t.GroupID {
+						continue
+					}
+					if items[i].PushDeliveries[j].RetryStatus != domain.ReportRetryStatusManualRepair {
+						items[i].PushDeliveries[j].RetryStatus = t.Status
+						items[i].PushDeliveries[j].NextRetryAt = t.NextRetryAt
+					}
+					break
+				}
+			}
+		}
+	}
 }
 
 // attachDeliveries 批量补齐报告的群组投递结果（列表/详情共用，避免 N+1）。

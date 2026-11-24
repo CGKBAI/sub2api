@@ -49,6 +49,12 @@ export default {
       pushPartial: 'Partial failure {ok}/{total} groups',
       qualityWarn: '⚠️ Quality notice'
     },
+    retry: {
+      generationRetrying: 'Generation retrying',
+      generationManual: 'Generation needs manual repair',
+      pushRetrying: 'Push retrying',
+      pushManual: 'Needs manual repair'
+    },
     goal: {
       title: 'Recent Goals',
       placeholder:

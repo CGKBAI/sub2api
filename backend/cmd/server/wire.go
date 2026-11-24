@@ -90,6 +90,7 @@ func provideCleanup(
 	opsCleanup *service.OpsCleanupService,
 	opsScheduledReport *service.OpsScheduledReportService,
 	reportScheduler *service.ReportSchedulerService,
+	reportRetryScheduler *service.ReportRetrySchedulerService,
 	opsSystemLogSink *service.OpsSystemLogSink,
 	opsService *service.OpsService,
 	opsIngressReject *service.OpsIngressRejectAggregator,
@@ -195,6 +196,12 @@ func provideCleanup(
 			{"ReportSchedulerService", func() error {
 				if reportScheduler != nil {
 					reportScheduler.Stop()
+				}
+				return nil
+			}},
+			{"ReportRetrySchedulerService", func() error {
+				if reportRetryScheduler != nil {
+					reportRetryScheduler.Stop()
 				}
 				return nil
 			}},

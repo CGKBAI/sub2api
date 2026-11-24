@@ -266,7 +266,17 @@ function pushDeliverySummary(report: Report) {
     total: deliveries.length,
     ok,
     failed: failed.length,
-    detail: failed.map((d) => `${d.group_name || `#${d.group_id}`}: ${d.error || 'failed'}`).join('\n')
+    detail: failed
+      .map((d) => {
+        const retry =
+          d.retry_status === 'manual_repair'
+            ? ` · ${t('admin.reports.retry.pushManual')}`
+            : d.retry_status === 'pending'
+              ? ` · ${t('admin.reports.retry.pushRetrying')}`
+              : ''
+        return `${d.group_name || `#${d.group_id}`}: ${d.error || 'failed'}${retry}`
+      })
+      .join('\n')
   }
 }
 
@@ -643,6 +653,18 @@ const statusBadge = computed(() => (status: string) => {
                   :title="report.quality_warnings"
                 >
                   {{ t('admin.reports.push.qualityWarn') }}
+                </span>
+                <span
+                  v-if="report.generation_retry_status"
+                  class="badge"
+                  :class="report.generation_retry_status === 'manual_repair' ? 'badge-danger' : 'badge-warning'"
+                  :title="report.generation_retry_error || ''"
+                >
+                  {{
+                    report.generation_retry_status === 'manual_repair'
+                      ? t('admin.reports.retry.generationManual')
+                      : t('admin.reports.retry.generationRetrying')
+                  }}
                 </span>
               </div>
               <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">

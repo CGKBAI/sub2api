@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -120,6 +121,54 @@ func (c *reportFeishuClient) PushTestCard(ctx context.Context, cfg *ReportLLMCon
 	return c.pushCard(ctx, cfg, title, body)
 }
 
+// reportFeishuError 保留 HTTP 状态码/飞书业务码，供重试逻辑区分瞬时/永久失败。
+type reportFeishuError struct {
+	HTTPStatus int
+	Code       int
+	Message    string
+	Permanent  bool
+}
+
+func (e *reportFeishuError) Error() string {
+	if e == nil {
+		return domain.ErrReportFeishuPushFailed.Error()
+	}
+	if e.Code != 0 {
+		return fmt.Sprintf("%v: code %d: %s", domain.ErrReportFeishuPushFailed, e.Code, e.Message)
+	}
+	if e.HTTPStatus > 0 {
+		return fmt.Sprintf("%v: http %d: %s", domain.ErrReportFeishuPushFailed, e.HTTPStatus, e.Message)
+	}
+	return fmt.Sprintf("%v: %s", domain.ErrReportFeishuPushFailed, e.Message)
+}
+
+func (e *reportFeishuError) Unwrap() error { return domain.ErrReportFeishuPushFailed }
+
+func newReportFeishuError(httpStatus, code int, message string) error {
+	permanent := false
+	switch {
+	case httpStatus == http.StatusTooManyRequests:
+		permanent = false
+	case httpStatus >= 400 && httpStatus < 500:
+		permanent = true
+	case httpStatus >= 500:
+		permanent = false
+	case code != 0:
+		// 飞书业务码：9499 是限流，其余多为 webhook/签名配置错误。
+		permanent = code != 9499
+	}
+	return &reportFeishuError{HTTPStatus: httpStatus, Code: code, Message: message, Permanent: permanent}
+}
+
+// reportFeishuErrorPermanent 判断飞书推送错误是否永久性（需人工修复）。
+func reportFeishuErrorPermanent(err error) bool {
+	var fe *reportFeishuError
+	if errors.As(err, &fe) {
+		return fe.Permanent
+	}
+	return false
+}
+
 // pushCard 组装并发送 interactive 卡片。
 func (c *reportFeishuClient) pushCard(ctx context.Context, cfg *ReportLLMConfig, title, body string) error {
 	payload := &feishuWebhookRequest{
@@ -151,21 +200,21 @@ func (c *reportFeishuClient) pushCard(ctx context.Context, cfg *ReportLLMConfig,
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %v", domain.ErrReportFeishuPushFailed, err)
+		return newReportFeishuError(0, 0, err.Error())
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return fmt.Errorf("%w: read response: %v", domain.ErrReportFeishuPushFailed, err)
+		return newReportFeishuError(resp.StatusCode, 0, "read response: "+err.Error())
 	}
 	parsed := &feishuWebhookResponse{}
 	_ = json.Unmarshal(raw, parsed)
 	if code, msg, ok := parsed.result(); !ok {
-		return fmt.Errorf("%w: code %d: %s", domain.ErrReportFeishuPushFailed, code, msg)
+		return newReportFeishuError(resp.StatusCode, code, msg)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: http %d", domain.ErrReportFeishuPushFailed, resp.StatusCode)
+		return newReportFeishuError(resp.StatusCode, 0, "unexpected status")
 	}
 	return nil
 }

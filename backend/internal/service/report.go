@@ -98,6 +98,27 @@ type ReportFeishuGroup = domain.ReportFeishuGroup
 
 type ReportPushDelivery = domain.ReportPushDelivery
 
+type ReportRetryTask = domain.ReportRetryTask
+
+// ReportRetryRepository 是报告生成/推送失败重试队列的持久化接口。
+type ReportRetryRepository interface {
+	// UpsertGeneration 写入/更新一个生成重试任务（同一用户周期唯一，attempts 自增）。
+	UpsertGeneration(ctx context.Context, t *ReportRetryTask) (*ReportRetryTask, error)
+	// UpsertPush 写入/更新一个推送重试任务（同一报告×群唯一，attempts 自增）。
+	UpsertPush(ctx context.Context, t *ReportRetryTask) (*ReportRetryTask, error)
+	// MarkDone 结束任务；MarkDoneByGeneration/MarkDoneByPush 按业务键结束，
+	// 用于成功路径（不依赖是否读到任务 ID）。
+	MarkDone(ctx context.Context, id int64) error
+	MarkDoneByGeneration(ctx context.Context, userID int64, reportType string, periodStart time.Time) error
+	MarkDoneByPush(ctx context.Context, reportID, groupID int64) error
+	// ListDue 返回到期且 status=pending 的任务。
+	ListDue(ctx context.Context, kind string, now time.Time, limit int) ([]ReportRetryTask, error)
+	// ListActiveByReportIDs 批量查询报告当前未结束的任务（列表展示用）。
+	ListActiveByReportIDs(ctx context.Context, reportIDs []int64) (map[int64][]ReportRetryTask, error)
+	// GetByID 读取单个任务（重试调度用）。
+	GetByID(ctx context.Context, id int64) (*ReportRetryTask, error)
+}
+
 // UserPromptSnippet 是用于 LLM 总结的单条 prompt 片段。
 type UserPromptSnippet struct {
 	Model     string

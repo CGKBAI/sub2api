@@ -48,6 +48,12 @@ export default {
       pushPartial: '部分失败 {ok}/{total} 群',
       qualityWarn: '⚠️ 质量提示'
     },
+    retry: {
+      generationRetrying: '生成重试中',
+      generationManual: '生成需人工修复',
+      pushRetrying: '推送重试中',
+      pushManual: '需人工修复'
+    },
     goal: {
       title: '近期目标',
       placeholder: '填写近期要完成的项目目标，如：完成 XX 功能开发并上线；日报将生成「近期目标计划」小节围绕这些目标制定',

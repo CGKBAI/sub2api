@@ -152,10 +152,10 @@ type reportLLMMessage struct {
 }
 
 type reportLLMChatRequest struct {
-	Model       string              `json:"model"`
-	Messages    []reportLLMMessage  `json:"messages"`
-	Temperature float64             `json:"temperature"`
-	MaxTokens   int                 `json:"max_tokens,omitempty"`
+	Model       string             `json:"model"`
+	Messages    []reportLLMMessage `json:"messages"`
+	Temperature float64            `json:"temperature"`
+	MaxTokens   int                `json:"max_tokens,omitempty"`
 }
 
 type reportLLMChatResponse struct {
@@ -170,6 +170,48 @@ type reportLLMChatResponse struct {
 }
 
 // ChatComplete 调用 OpenAI 兼容的 /chat/completions 接口生成文本。
+// reportLLMCallError 保留 HTTP 状态码，供重试逻辑区分瞬时/永久失败。
+type reportLLMCallError struct {
+	StatusCode int
+	Message    string
+	Permanent  bool
+}
+
+func (e *reportLLMCallError) Error() string {
+	if e == nil {
+		return ErrReportLLMCallFailed.Error()
+	}
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("%v: http %d: %s", ErrReportLLMCallFailed, e.StatusCode, e.Message)
+	}
+	return fmt.Sprintf("%v: %s", ErrReportLLMCallFailed, e.Message)
+}
+
+func (e *reportLLMCallError) Unwrap() error { return ErrReportLLMCallFailed }
+
+func newReportLLMCallError(statusCode int, message string, permanent bool) error {
+	return &reportLLMCallError{StatusCode: statusCode, Message: message, Permanent: permanent}
+}
+
+func permanentReportLLMStatus(statusCode int) bool {
+	switch statusCode {
+	case 400, 401, 403, 404, 422:
+		// 请求体/模型/key/webhook 配置类错误：重试不会自愈，需人工修复。
+		return true
+	default:
+		return false
+	}
+}
+
+// reportLLMErrorPermanent 判断 LLM 调用错误是否永久性（需人工修复）。
+func reportLLMErrorPermanent(err error) bool {
+	var callErr *reportLLMCallError
+	if errors.As(err, &callErr) {
+		return callErr.Permanent
+	}
+	return false
+}
+
 func (c *reportLLMClient) ChatComplete(ctx context.Context, cfg *ReportLLMConfig, systemPrompt, userPrompt string) (string, error) {
 	if cfg == nil || cfg.BaseURL == "" || cfg.APIKey == "" || cfg.Model == "" {
 		return "", ErrReportLLMNotConfigured
@@ -200,32 +242,32 @@ func (c *reportLLMClient) ChatComplete(ctx context.Context, cfg *ReportLLMConfig
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrReportLLMCallFailed, err)
+		return "", newReportLLMCallError(0, err.Error(), false)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return "", fmt.Errorf("%w: read response: %v", ErrReportLLMCallFailed, err)
+		return "", newReportLLMCallError(resp.StatusCode, "read response: "+err.Error(), permanentReportLLMStatus(resp.StatusCode))
 	}
 
 	parsed := &reportLLMChatResponse{}
 	if err := json.Unmarshal(body, parsed); err != nil {
-		return "", fmt.Errorf("%w: invalid response (http %d)", ErrReportLLMCallFailed, resp.StatusCode)
+		return "", newReportLLMCallError(resp.StatusCode, "invalid response", permanentReportLLMStatus(resp.StatusCode))
 	}
 	if parsed.Error != nil && parsed.Error.Message != "" {
-		return "", fmt.Errorf("%w: %s", ErrReportLLMCallFailed, parsed.Error.Message)
+		return "", newReportLLMCallError(resp.StatusCode, parsed.Error.Message, permanentReportLLMStatus(resp.StatusCode))
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%w: http %d", ErrReportLLMCallFailed, resp.StatusCode)
+		return "", newReportLLMCallError(resp.StatusCode, "unexpected status", permanentReportLLMStatus(resp.StatusCode))
 	}
 	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("%w: empty choices", ErrReportLLMCallFailed)
+		return "", newReportLLMCallError(resp.StatusCode, "empty choices", false)
 	}
 
 	content := strings.TrimSpace(stripReasoningTrace(parsed.Choices[0].Message.Content))
 	if content == "" {
-		return "", fmt.Errorf("%w: empty content", ErrReportLLMCallFailed)
+		return "", newReportLLMCallError(resp.StatusCode, "empty content", false)
 	}
 	return content, nil
 }

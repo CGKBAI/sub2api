@@ -685,9 +685,10 @@ func ProvideOpsScheduledReportService(
 func ProvideReportService(
 	reportRepo ReportRepository,
 	groupRepo ReportGroupRepository,
+	retryRepo ReportRetryRepository,
 	settingRepo SettingRepository,
 ) *ReportService {
-	return NewReportService(reportRepo, groupRepo, settingRepo)
+	return NewReportServiceWithRetry(reportRepo, groupRepo, retryRepo, settingRepo)
 }
 
 // ProvideReportSchedulerService creates and starts the report scheduler.
@@ -697,6 +698,18 @@ func ProvideReportSchedulerService(
 	cfg *config.Config,
 ) *ReportSchedulerService {
 	svc := NewReportSchedulerService(reportService, redisClient, cfg)
+	svc.Start()
+	return svc
+}
+
+// ProvideReportRetrySchedulerService creates and starts the report retry scheduler.
+func ProvideReportRetrySchedulerService(
+	reportService *ReportService,
+	retryRepo ReportRetryRepository,
+	redisClient *redis.Client,
+	cfg *config.Config,
+) *ReportRetrySchedulerService {
+	svc := NewReportRetrySchedulerService(reportService, retryRepo, redisClient, cfg)
 	svc.Start()
 	return svc
 }
@@ -952,6 +965,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsScheduledReportService,
 	ProvideReportService,
 	ProvideReportSchedulerService,
+	ProvideReportRetrySchedulerService,
 	NewEmailService,
 	NewNotificationEmailService,
 	ProvideEmailQueueService,
