@@ -18,14 +18,14 @@ const validDailyBody = `## 一、今日核心工作
 1. 推进支付渠道对接`
 
 func TestCheckReportQualityDailyHappyPath(t *testing.T) {
-	res := checkReportQuality(validDailyBody, ReportTypeDaily, false, false)
+	res := checkReportQuality(validDailyBody, ReportTypeDaily, false)
 	if len(res.Hard) != 0 || len(res.Soft) != 0 || res.Sensitive {
 		t.Fatalf("valid body should pass clean, got hard=%v soft=%v sensitive=%v", res.Hard, res.Soft, res.Sensitive)
 	}
 }
 
 func TestCheckReportQualityRequiresTwoSections(t *testing.T) {
-	res := checkReportQuality("今天做了很多事情", ReportTypeDaily, false, false)
+	res := checkReportQuality("今天做了很多事情", ReportTypeDaily, false)
 	if len(res.Hard) == 0 {
 		t.Fatal("missing sections should be a hard violation")
 	}
@@ -39,7 +39,7 @@ func TestCheckReportQualityFlagsToolTalk(t *testing.T) {
 
 ## 二、明日工作计划
 1. 推进支付对接`
-	res := checkReportQuality(body, ReportTypeDaily, false, false)
+	res := checkReportQuality(body, ReportTypeDaily, false)
 	joined := strings.Join(res.Hard, "；")
 	for _, want := range []string{"请求次数", "工具名", "模式名"} {
 		if !strings.Contains(joined, want) {
@@ -50,33 +50,33 @@ func TestCheckReportQualityFlagsToolTalk(t *testing.T) {
 
 func TestCheckReportQualityDetectsSensitiveContent(t *testing.T) {
 	body := validDailyBody + "\n\n密钥 sk-abcdefgh12345678 配置在环境变量里"
-	res := checkReportQuality(body, ReportTypeDaily, false, false)
+	res := checkReportQuality(body, ReportTypeDaily, false)
 	if !res.Sensitive {
 		t.Fatalf("secret should be flagged sensitive, hard=%v", res.Hard)
 	}
 
 	withEmail := validDailyBody + "\n\n联系 zhangsan@example.com 处理"
-	if res := checkReportQuality(withEmail, ReportTypeDaily, false, false); !res.Sensitive {
+	if res := checkReportQuality(withEmail, ReportTypeDaily, false); !res.Sensitive {
 		t.Fatal("email should be flagged sensitive")
 	}
 }
 
 func TestCheckReportQualityThirdSectionRules(t *testing.T) {
 	// 有近期目标但没有第三节 → 硬违规
-	res := checkReportQuality(validDailyBody, ReportTypeDaily, true, false)
+	res := checkReportQuality(validDailyBody, ReportTypeDaily, true)
 	if !strings.Contains(strings.Join(res.Hard, "；"), "近期目标计划") {
 		t.Fatalf("missing third section should be hard: %v", res.Hard)
 	}
 
 	// 没有近期目标却输出第三节 → 硬违规
 	withThird := validDailyBody + "\n\n## 三、近期目标计划\n1. 启动新项目"
-	res = checkReportQuality(withThird, ReportTypeDaily, false, false)
+	res = checkReportQuality(withThird, ReportTypeDaily, false)
 	if !strings.Contains(strings.Join(res.Hard, "；"), "第三个") {
 		t.Fatalf("unexpected third section should be hard: %v", res.Hard)
 	}
 
 	// 有目标也有第三节 → 通过
-	if res := checkReportQuality(withThird, ReportTypeDaily, true, false); len(res.Hard) != 0 {
+	if res := checkReportQuality(withThird, ReportTypeDaily, true); len(res.Hard) != 0 {
 		t.Fatalf("goal + third section should pass, got %v", res.Hard)
 	}
 }
@@ -91,7 +91,7 @@ func TestCheckReportQualitySoftIssues(t *testing.T) {
 1. 推进支付渠道对接
 
 ` + "```go\nfmt.Println(1)\n```\n"
-	res := checkReportQuality(body, ReportTypeDaily, false, false)
+	res := checkReportQuality(body, ReportTypeDaily, false)
 	if len(res.Hard) != 0 {
 		t.Fatalf("soft issues should not be hard: %v", res.Hard)
 	}

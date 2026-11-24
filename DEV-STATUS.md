@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-11-24（**v4.2+v4.3 已发布 stable**：v4.3 日报附节 D 方案——20:00 照发，20:00–24:00 工作进次日日报 `## 附：昨晚 20:00 后补充`，正文/附节以 20:00 为硬切点；dev 启动冒烟、真实流量生成、后端 build/service 测试、前端 vue-tsc 全绿。发布备份 `sub2api:stable-backup-20261124-1315`，生产 33333 healthy、`/health` 200、前端 index hash 与 dev 一致，见 §8 v4.3）。
+> 本文档是完整项目上下文。最后更新：2026-11-24（**v4.4 已发布 stable**：日报改为滚动 24 小时窗口 `[D-1 切点, D 切点)`，切点取 `DailySchedule` 时分（当前 20:00），前晚工作直接进「今日核心工作」，**取消 v4.3 附节**；v4.2 质量闭环保留。dev 启动冒烟、真实流量生成、后端 build/service 测试、前端 vue-tsc 全绿。发布备份 `sub2api:stable-backup-20261124-1522`，生产 33333 healthy、`/health` 200、前端 index hash 与 dev 一致，见 §8 v4.4）。
 
 ## 1. 功能与当前状态总览
 
@@ -18,7 +18,8 @@
 10. ✅ **DeepSeek Search/Fetch**（2026-11-03 已上线生产）：`POST /v1/tools/search`、`POST /v1/tools/fetch`，仅原生 DeepSeek 分组（Composite 等一律 404）；复用调度器只选 DeepSeek API Key 账号；请求/成功响应原样转发；200 且有 results/content 才按次计费（默认 0.005，可覆盖/免费/倍率），Search query 走提示词审计，见 §8 v4.0
 11. ✅ **飞书多群推送**（2026-11-19 已上线生产）：新增 `report_feishu_groups` / `report_feishu_group_members` / `report_feishu_deliveries` 三表；定时与手动推送都按报告作者所属的**所有启用群组**投递（同一 webhook 去重），单群失败不影响其他群；原全局 webhook 自动迁移为「计算群」，仅当时 `report_push_enabled=true` 的 13 个用户入组；管理员在报告页「报告群组」tab 维护群与成员，见 §8 v4.1
 12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 dev 已验证，2026-11-24 随 v4.3 发布 stable）：①审计截断**按段分配预算**（最新用户消息 16k + 尾部块 + 1.5k 系统提示词，静态技能清单丢弃），不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③**每 session 取「最新 + 中段」两条快照**，补回被截断丢掉的中段；④生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；⑤推送幂等：已推送过的周期不再自动重复推；⑥新增 `user_text` 列，救回此前静默丢失的 8.1% 用户提问；⑦窗口降噪：按内容特征给窗口打分，先把预算让给干净窗口。见 §8 v4.2
-13. ✅ **日报附节「昨晚 20:00 后补充」v4.3**（2026-11-24 代码已实现，dev 验证通过，已发布 stable）：用户选 D 方案——**20:00 照发主日报**，20:00–24:00 的工作写进**次日日报末尾附节**，不额外发卡片、不延迟主日报；正文/附节以 20:00 为硬切点 `[D 00:00,D 20:00)` / `[D-1 20:00,D 00:00)`；格式与改造清单见 §8 v4.3
+13. ⏪ **日报附节「昨晚 20:00 后补充」v4.3**（2026-11-24 曾发布 stable，同日被 v4.4 取代）：20:00–24:00 的工作写进次日日报末尾附节；因群消息冗余，v4.4 改为滚动 24 小时窗口，附节取消。见 §8 v4.3（历史）
+14. ✅ **日报滚动 24h 窗口 v4.4**（2026-11-24 已发布 stable）：日报覆盖 `[D-1 切点, D 切点)`，切点取 `DailySchedule` 时分（当前 20:00）；前晚工作直接进「今日核心工作」，**不再有附节/`annex_requests`**；统计、活跃用户、请求阈值统一用该 24h 窗口；`period_start` 保持 D 00:00（唯一键/日期筛选不变）、`period_end` 为 D 切点；见 §8 v4.4
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -169,9 +170,12 @@ docker compose up -d sub2api
 - 新增：`migrations/250_report_quality_warnings.sql`（reports.quality_warnings，纯增量）、`migrations/251_prompt_audit_user_text.sql`（prompt_audit_events.user_text，纯增量）、`service/report_quality.go`（+`_test.go`）、`service/report_material_test.go`
 - 修改：`securityaudit/prompt_snapshot.go`（`buildFullPromptFromScanText` 按段分配预算 + `LatestUserTextFromScanText`）、`securityaudit/prompt_worker.go`（从 scanText 重算 FullPrompt/UserText）、`securityaudit/prompt_repository.go`（INSERT 增列）、`securityaudit/prompt_types.go`（PromptSnapshot.UserText）、`service/report_service.go`（`buildSummary` 拆为 `buildSummaryPrompt` + `completeCheckedReport`、窗口采样重写 + 降噪打分、总量预算、推送幂等）、`service/report.go`（UserPromptSnippet.CleanText）、`domain/report.go`（QualityWarnings + ErrReportSensitiveContent）、`ent/schema/report.go`（quality_warnings，含 ent 生成物）、`repository/report_repo.go`（user_text 读取 + 双快照）、`handler/dto/report.go`、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（⚠️ 质量提示徽标）、i18n zh/en `push.qualityWarn`
 
-**日报附节（v4.3，2026-11-24，2026-11-24 发布）**：
+**日报附节（v4.3，2026-11-24，同日被 v4.4 取代）**：
 - 新增：`service/report_annex_test.go`
 - 修改：`service/report_service.go`（`reportWindows`、`reportDailyCutoff`、`reportDailyWindow`、`resolveReportWindows`、`GenerateReport`/`GenerateForAllUsers` 双窗口、`buildSummaryPrompt`/`collectReportMaterials`/`trimReportMaterials` 附节素材、`reportSystemPrompt` 附节指令）、`service/report_quality.go`（附节 regex、`splitReportAnnex`、`normalizeReportAnnex`、附节质量规则）、`domain/report.go`（`ReportStats.AnnexRequests`，JSON 字段无需迁移）、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（periodLabel + annexRequests 展示）、i18n zh/en（`stats.annexRequests`、`config.scheduleHint`）
+
+**日报滚动 24h 窗口（v4.4，2026-11-24 发布）**：
+- 修改：`service/report_service.go`（`reportWindows` 改为数据窗口 + 报告日期四字段、`reportDailyWindow` 返回 `[D-1 切点,D 切点)`、`GenerateReport`/`GenerateForAllUsers` 单窗口、`buildSummaryPrompt` 去掉附节素材、`reportSystemPrompt` 加“跨自然日、所有工作归入今日核心工作、不要附节”指令）、`service/report_quality.go`（删除附节校验，保留 `stripReportAnnex` 防御旧摘要/模型漂移）、`domain/report.go`（删除 `AnnexRequests`）、前端 `api/admin/reports.ts`（删 `annex_requests`）、`views/{admin,user}/ReportsView.vue`（删附节统计行）、i18n zh/en（删 `annexRequests`、`scheduleHint` 改为滚动窗口说明）、`service/report_daily_window_test.go`（由 v4.3 测试改写为滚动窗口测试）
 
 **修改官方文件（挂载点）**：`config.go`（ReportConfig）、`handler.go|handler/wire.go`、`service/wire.go`、`repository/wire.go`、`routes/admin.go|user.go`、`cmd/server/wire.go`（cleanup）、`domain_constants.go`（SettingKeyReportConfig）、router/index.ts、AppSidebar.vue（ReportIcon）、i18n common.ts nav + admin/index.ts ×2、go.mod/go.sum（wire cmd indirect）
 
@@ -368,8 +372,10 @@ docker compose up -d sub2api
 - **报告里显示「素材覆盖率」**：生成时记下"有效素材字符 / 原始上下文字符"，前端/卡片展示，让人自己判断报告可信度。属于体验增强，不是缺陷。
 - **审计扫描器故障 `prompt_guard_unavailable`**：2026-11-23 排查时发现近 24h 全部 48,618 条审计事件都是 `scan_failed:prompt_guard_unavailable`（风险扫描实际处于关闭状态）。**与日报链路无关**（v3.5 降级落库保证消息仍完整保存，日报素材不受影响），但属于独立的生产问题，需单独排查审计节点（MiniMax 账号 id=5 / 端点 / key）。
 
-### v4.3：日报附节「昨晚 20:00 后补充」（D 方案，2026-11-24 已发布 stable）
+### v4.3：日报附节「昨晚 20:00 后补充」（D 方案，2026-11-24 曾发布 stable，已由 v4.4 取代）
 
+> **已被 v4.4 取代（2026-11-24）**：日报改为滚动 24 小时窗口，附节取消；以下保留历史记录。
+>
 > 背景：生产日报在 20:00 生成（库内 `report_config` 当前 `0 20 * * *`、`skip_holidays=false`），当天 20:00–24:00 的使用不会进当晚报告，也不会自动滚进次日。实测近 7 天 11-18 有 24.7%、11-22 有 66.7% 的请求发生在 20:00 后；11-22 当晚 3 份日报都是 20:00 生成的，那晚大部分工作不在里面。
 > 决策（用户确认，D 方案）：**20:00 照发主日报；20:00 后的工作写进次日日报末尾的附节**，不额外发卡片、不延迟主日报。
 > 核心口径：以日报 cron 的时分（当前 20:00）为硬切点。报告日 D 的正文覆盖 `[D 00:00, D 20:00)`；附节覆盖 `[D-1 20:00, D 00:00)`。两个窗口在 D 20:00 生成时都已闭合，补跑/重生成不会产生时间漂移，也不会和正文重叠。
@@ -442,6 +448,44 @@ docker compose up -d sub2api
 - 标题用 `附：`，不用 `四、`：编号会随「有没有近期目标」漂移。
 - 附节统计不并入主 `stats`：同一晚数据不能在两天重复计数；需要展示就单列 `annex_requests`。
 - v1 不做跨周/跨月回算：先保证「不丢」，周期归属边界后续再优化。
+
+### v4.4：日报滚动 24 小时窗口（2026-11-24 已发布 stable）
+
+> 背景：v4.3 的附节让群卡片多出一块，用户反馈冗余。决策：日报改为**滚动 24 小时窗口** `[D-1 切点, D 切点)`，前晚工作直接进「今日核心工作」，**取消附节**；切点仍取 `DailySchedule` 的时分，不写死。
+> 核心口径：报告日 D 的日报覆盖前一天切点至当天切点；`period_start` 仍是 D 00:00（唯一键/日期筛选不变），`period_end` 是 D 切点；统计、活跃用户、请求阈值统一使用这一个 24h 窗口。
+
+**格式（仅这三个小节，不再有附节）**
+
+```markdown
+# 工作日报（2026-11-24）- 谢翔宇
+
+## 一、今日核心工作
+1. 完成报告窗口改造并补充单测
+2. 修复报告页跨时区筛选偏差
+3. ...
+
+## 二、明日工作计划
+1. ...
+
+## 三、近期目标计划
+1. ...
+```
+
+**实现要点**
+
+- `reportWindows` 拆为数据窗口 `Start/End` 与报告日期 `ReportStart/ReportEnd`；日报 `Start=D-1 切点`、`End=D 切点`、`ReportStart=D 00:00`、`ReportEnd=D 切点`
+- `GenerateReport`/`GenerateForAllUsers` 只取一个窗口；不再做附节素材、`annex_requests`、正文∪附节并集、阈值合计
+- `buildSummaryPrompt` 只注入一个窗口的素材；`reportSystemPrompt` 明确「窗口可能跨自然日，所有工作归入今日核心工作，不要另起附节/昨晚小节」
+- `report_quality.go` 删除附节校验；保留 `stripReportAnnex` 防御旧日报摘要带来的 `## 附` 或模型漂移
+- 前端删除「另含前晚 N 条」统计行和 `annex_requests` 类型；日报 `period_end` 仍是 D 切点，标签继续显示「D（截至 20:00）」
+- 周报/月报保持自然周/自然月口径不变（已知边界：周一日报会包含周日晚上，聚合时归属下一周期）
+
+**验证与发布（2026-11-24）**
+
+- 后端 `go build ./...`、`go vet`、`go test ./internal/service/...` 全绿；前端 `vue-tsc`、i18n 完整性测试通过
+- dev 33336 真实流量生成（admin 手动，user 7 / 2026-11-20）：请求 **38** 条（前晚 33 + 当天 5），与 `usage_logs` 24h 窗口一致；正文含前晚 `IdeaToDoc` 工作；**无 `## 附`、无 `annex_requests` 字段**；`pushed_at` 为空；验证后删除测试报告 855
+- 发布：备份 `sub2api:stable-backup-20261124-1522`（v4.3 stable）→ `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index `index-DUQ2agLp.js` 与 dev 一致
+- [ ] 2026-11-24 20:00 首个定时周期观察：日报生成、自动推送、卡片无附节、窗口为 11-23 20:00 ~ 11-24 20:00
 
 ### 后续迭代
 

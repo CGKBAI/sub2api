@@ -81,9 +81,6 @@ type ReportStats struct {
 	Hourly map[int]int64 `json:"hourly"`
 	// 参与总结的 prompt 片段数量
 	PromptCount int64 `json:"prompt_count"`
-	// 前一日 20:00 后（附节窗口）的请求数；仅日报使用，不并入上方总量，
-	// 避免同一晚数据在两天统计里重复计数。
-	AnnexRequests int64 `json:"annex_requests"`
 }
 
 // Report 是单人单周期的报告实体。

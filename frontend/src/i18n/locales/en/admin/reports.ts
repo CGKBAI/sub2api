@@ -36,7 +36,6 @@ export default {
       inputTokens: 'Input tokens',
       outputTokens: 'Output tokens',
       cost: 'Cost',
-      annexRequests: 'Plus {n} requests after the previous night cutoff',
       prompts: 'Prompt snippets',
       models: 'Model distribution',
       hourly: 'Active hours'
@@ -111,7 +110,7 @@ export default {
       weeklySchedule: 'Weekly cron (hour & minute only)',
       monthlySchedule: 'Monthly cron (hour & minute only)',
       scheduleHint:
-        'All three crons use hour & minute only, evaluated once per day; the daily cron time is also the body cutoff, and later work goes into the next day\'s report annex; the generation-day rules are controlled by the "Holiday awareness" toggle in the header',
+        'All three crons use hour & minute only, evaluated once per day; the daily cron time is also the end of the statistics window, covering from that time the previous day to that time today; the generation-day rules are controlled by the "Holiday awareness" toggle in the header',
       feishuSection: 'Feishu Push',
       feishuDescription:
         'Push report cards to a Feishu group via custom bot webhook. Get one in Feishu: group settings → bots → add custom bot.',

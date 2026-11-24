@@ -698,13 +698,6 @@ const statusBadge = computed(() => (status: string) => {
               </div>
             </div>
           </div>
-          <div
-            v-if="(report.stats?.annex_requests ?? 0) > 0"
-            class="mt-1 text-xs text-gray-500 dark:text-gray-400"
-          >
-            {{ t('admin.reports.stats.annexRequests', { n: report.stats?.annex_requests ?? 0 }) }}
-          </div>
-
           <!-- 模型分布 -->
           <div v-if="modelEntries(report).length" class="mt-3 flex flex-wrap gap-1.5">
             <span

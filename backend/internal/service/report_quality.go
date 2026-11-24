@@ -32,9 +32,8 @@ const (
 var (
 	// reportSectionHeadingRe 匹配 "## 一、" 这类小节标题。
 	reportSectionHeadingRe = regexp.MustCompile(`(?m)^##\s*([一二三四])、\s*(.*)$`)
-	// reportAnnexHeadingRe 匹配日报附节标题（唯一允许的非编号 ## 小节）。
-	reportAnnexHeadingRe = regexp.MustCompile(`(?m)^##\s*附[:：]\s*昨晚\s*\d{2}:\d{2}\s*后补充\s*$`)
-	// reportAnnexAnyRe 兼容 LLM 把附节写成加粗/多余层级的情况，用于生成后归一化。
+	// reportAnnexAnyRe 兼容旧版/模型漂移产生的附节标题；新格式不再有附节，
+	// 命中后整段剥除，避免群卡片多出一块。
 	reportAnnexAnyRe = regexp.MustCompile(`(?m)^(?:#{1,6}\s*|\*\*\s*)附[:：]\s*昨晚\s*\d{2}:\d{2}\s*后补充\s*(?:\*\*)?\s*$`)
 	// reportItemLineRe 匹配编号条目。
 	reportItemLineRe = regexp.MustCompile(`(?m)^\s*\d+[.、)．]\s*(.+)$`)
@@ -81,7 +80,7 @@ type reportQualityResult struct {
 }
 
 // checkReportQuality 校验 LLM 输出的报告正文（不含后端拼接的标题行）。
-func checkReportQuality(content, reportType string, hasGoal, hasAnnex bool) reportQualityResult {
+func checkReportQuality(content, reportType string, hasGoal bool) reportQualityResult {
 	var res reportQualityResult
 	body := strings.TrimSpace(content)
 	if body == "" {
@@ -95,14 +94,13 @@ func checkReportQuality(content, reportType string, hasGoal, hasAnnex bool) repo
 	for _, m := range reportSectionHeadingRe.FindAllStringSubmatch(body, -1) {
 		sections[m[1]] = true
 	}
-	annexHeading, annexBody := splitReportAnnex(body)
 	var unexpected []string
 	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if reportSectionHeadingRe.MatchString(trimmed) || reportAnnexHeadingRe.MatchString(trimmed) {
+		if reportSectionHeadingRe.MatchString(trimmed) {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "# ") {
@@ -119,26 +117,6 @@ func checkReportQuality(content, reportType string, hasGoal, hasAnnex bool) repo
 	}
 	if !needThird && (sections["三"] || sections["四"]) {
 		res.Hard = append(res.Hard, "未提供近期目标，不要输出第三个及以后的小节")
-	}
-	if reportType == domain.ReportTypeDaily {
-		if hasAnnex && annexHeading == "" {
-			res.Hard = append(res.Hard, "素材包含前一日切点后的工作，必须输出「## 附：昨晚 HH:MM 后补充」小节")
-		}
-		if !hasAnnex && annexHeading != "" {
-			res.Hard = append(res.Hard, "没有前一日切点后素材时不要输出附节")
-		}
-	}
-	if annexHeading != "" {
-		annexItems := reportItemLineRe.FindAllStringSubmatch(annexBody, -1)
-		if len(annexItems) < 1 || len(annexItems) > 3 {
-			res.Soft = append(res.Soft, fmt.Sprintf("附节条目数建议 1-3 条（当前 %d 条）", len(annexItems)))
-		}
-		for _, m := range annexItems {
-			if n := len([]rune(strings.TrimSpace(m[1]))); n > 30 {
-				res.Soft = append(res.Soft, fmt.Sprintf("附节存在过长条目（%d 字，建议 ≤30 字）", n))
-				break
-			}
-		}
 	}
 	for _, name := range unexpected {
 		res.Soft = append(res.Soft, fmt.Sprintf("出现非模板小节：%s", name))
@@ -221,31 +199,10 @@ func splitReportSections(body string) map[string]string {
 	return out
 }
 
-// splitReportAnnex 取出附节标题与正文（附节约定为全文最后一个小节）。
-func splitReportAnnex(body string) (heading, content string) {
-	lines := strings.Split(body, "\n")
-	start := -1
-	for i, line := range lines {
-		if reportAnnexHeadingRe.MatchString(strings.TrimSpace(line)) {
-			start = i
-			heading = strings.TrimSpace(line)
-			break
-		}
-	}
-	if start < 0 {
-		return "", ""
-	}
-	var b strings.Builder
-	for _, line := range lines[start+1:] {
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-	return heading, b.String()
-}
-
-// normalizeReportAnnex 把 LLM 输出的附节标题归一化成后端约定的 ## 形式；
-// 没有附节素材时把整段附节剥掉（防止模型凭空补一条昨晚的工作）。
-func normalizeReportAnnex(body string, hasAnnex bool, expectedHeading string) string {
+// stripReportAnnex 剥掉旧版/模型漂移产生的附节（约定为全文最后一段）。
+// 新日报是滚动 24 小时窗口，不再有附节；周报/月报聚合旧日报摘要时也可能
+// 带进 ## 附，统一在这里清掉，避免群卡片多出一块。
+func stripReportAnnex(body string) string {
 	lines := strings.Split(body, "\n")
 	start := -1
 	for i, line := range lines {
@@ -257,13 +214,7 @@ func normalizeReportAnnex(body string, hasAnnex bool, expectedHeading string) st
 	if start < 0 {
 		return body
 	}
-	if !hasAnnex {
-		return strings.TrimRight(strings.Join(lines[:start], "\n"), "\n")
-	}
-	if expectedHeading != "" && strings.TrimSpace(lines[start]) != expectedHeading {
-		lines[start] = expectedHeading
-	}
-	return strings.Join(lines, "\n")
+	return strings.TrimRight(strings.Join(lines[:start], "\n"), "\n")
 }
 
 func reportItemRange(reportType string) (int, int) {

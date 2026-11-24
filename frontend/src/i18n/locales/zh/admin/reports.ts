@@ -35,7 +35,6 @@ export default {
       inputTokens: '输入 tokens',
       outputTokens: '输出 tokens',
       cost: '费用',
-      annexRequests: '另含前晚切点后 {n} 条请求',
       prompts: 'Prompt 片段',
       models: '模型分布',
       hourly: '活跃时段'
@@ -108,7 +107,7 @@ export default {
       dailySchedule: '日报 cron（仅时分生效）',
       weeklySchedule: '周报 cron（仅时分生效）',
       monthlySchedule: '月报 cron（仅时分生效）',
-      scheduleHint: '三个 cron 仅「时 分」生效，每天在该时刻评估一次；日报的「时 分」同时作为正文切点，之后的工作计入次日日报的附节；生成日期规则由页头「节假日感知」开关决定',
+      scheduleHint: '三个 cron 仅「时 分」生效，每天在该时刻评估一次；日报的「时 分」同时作为统计窗口终点，覆盖前一天该时刻到当天该时刻；生成日期规则由页头「节假日感知」开关决定',
       feishuSection: '飞书推送',
       feishuDescription: '通过群自定义机器人 Webhook 把报告卡片推送到飞书群；在飞书群「设置 → 群机器人 → 添加自定义机器人」获取。',
       feishuEnabled: '启用飞书推送',
