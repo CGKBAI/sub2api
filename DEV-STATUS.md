@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-11-24（**v4.3 日报附节 D 方案代码已实现，dev 33336 启动冒烟与真实流量生成验证通过**：20:00 照发，20:00–24:00 工作进次日日报 `## 附：昨晚 20:00 后补充`，正文/附节以 20:00 为硬切点；后端 build/service 测试、前端 vue-tsc 全绿，见 §8 v4.3；v4.2 已在 dev 验证、待发布 stable；生产仍为 v4.1 stable）。
+> 本文档是完整项目上下文。最后更新：2026-11-24（**v4.2+v4.3 已发布 stable**：v4.3 日报附节 D 方案——20:00 照发，20:00–24:00 工作进次日日报 `## 附：昨晚 20:00 后补充`，正文/附节以 20:00 为硬切点；dev 启动冒烟、真实流量生成、后端 build/service 测试、前端 vue-tsc 全绿。发布备份 `sub2api:stable-backup-20261124-1315`，生产 33333 healthy、`/health` 200、前端 index hash 与 dev 一致，见 §8 v4.3）。
 
 ## 1. 功能与当前状态总览
 
@@ -17,8 +17,8 @@
 9. ✅ **飞书推送**（2026-09-17 已上线生产）：群自定义机器人 Webhook + interactive 卡片；生成成功自动推（类型开关+用户开关）+ 手动按钮（本人/admin）；commit 7c3f80740，见 §10
 10. ✅ **DeepSeek Search/Fetch**（2026-11-03 已上线生产）：`POST /v1/tools/search`、`POST /v1/tools/fetch`，仅原生 DeepSeek 分组（Composite 等一律 404）；复用调度器只选 DeepSeek API Key 账号；请求/成功响应原样转发；200 且有 results/content 才按次计费（默认 0.005，可覆盖/免费/倍率），Search query 走提示词审计，见 §8 v4.0
 11. ✅ **飞书多群推送**（2026-11-19 已上线生产）：新增 `report_feishu_groups` / `report_feishu_group_members` / `report_feishu_deliveries` 三表；定时与手动推送都按报告作者所属的**所有启用群组**投递（同一 webhook 去重），单群失败不影响其他群；原全局 webhook 自动迁移为「计算群」，仅当时 `report_push_enabled=true` 的 13 个用户入组；管理员在报告页「报告群组」tab 维护群与成员，见 §8 v4.1
-12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 dev 已验证，待发布）：①审计截断**按段分配预算**（最新用户消息 16k + 尾部块 + 1.5k 系统提示词，静态技能清单丢弃），不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③**每 session 取「最新 + 中段」两条快照**，补回被截断丢掉的中段；④生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；⑤推送幂等：已推送过的周期不再自动重复推；⑥新增 `user_text` 列，救回此前静默丢失的 8.1% 用户提问；⑦窗口降噪：按内容特征给窗口打分，先把预算让给干净窗口。见 §8 v4.2
-13. 🧭 **日报附节「昨晚 20:00 后补充」v4.3**（2026-11-24 代码已实现，dev 启动冒烟与真实流量生成验证通过）：用户选 D 方案——**20:00 照发主日报**，20:00–24:00 的工作写进**次日日报末尾附节**，不额外发卡片、不延迟主日报；正文/附节以 20:00 为硬切点 `[D 00:00,D 20:00)` / `[D-1 20:00,D 00:00)`；格式与改造清单见 §8 v4.3
+12. ✅ **报告素材与质量闭环 v4.2**（2026-11-23 dev 已验证，2026-11-24 随 v4.3 发布 stable）：①审计截断**按段分配预算**（最新用户消息 16k + 尾部块 + 1.5k 系统提示词，静态技能清单丢弃），不再丢最近的工作；②对话窗口采样改尾部优先 + 段首对齐 + 跳过代码块；③**每 session 取「最新 + 中段」两条快照**，补回被截断丢掉的中段；④生成后确定性质量校验（小节结构/禁语/敏感信息），硬违规带反馈重写一次，仍不合格则**照发并打 ⚠️ 标记**（敏感信息例外，整篇判失败）；⑤推送幂等：已推送过的周期不再自动重复推；⑥新增 `user_text` 列，救回此前静默丢失的 8.1% 用户提问；⑦窗口降噪：按内容特征给窗口打分，先把预算让给干净窗口。见 §8 v4.2
+13. ✅ **日报附节「昨晚 20:00 后补充」v4.3**（2026-11-24 代码已实现，dev 验证通过，已发布 stable）：用户选 D 方案——**20:00 照发主日报**，20:00–24:00 的工作写进**次日日报末尾附节**，不额外发卡片、不延迟主日报；正文/附节以 20:00 为硬切点 `[D 00:00,D 20:00)` / `[D-1 20:00,D 00:00)`；格式与改造清单见 §8 v4.3
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -165,11 +165,11 @@ docker compose up -d sub2api
 - 新增：`migrations/249_report_feishu_groups.sql`、`service/report_feishu_group.go`（+`_test.go`）、`repository/report_group_repo.go`、`handler/dto/report_group.go`
 - 修改挂载点：`domain/report.go`（群组/投递类型 + 迁移错误）、`service/report.go`（ReportGroupRepository）、`service/report_service.go`（构造器注入 groupRepo、多群推送、列表补齐投递）、`service/report_feishu.go`（PushTestCard/pushCard 抽取）、`handler/admin/report_handler.go`（群组 CRUD/成员/测试接口、config 保存忽略脱敏占位符）、`handler/dto/report.go`、`server/routes/admin.go`、`repository/wire.go`、`service/wire.go`
 
-**报告素材与质量闭环（v4.2，2026-11-23，未发布）**：
+**报告素材与质量闭环（v4.2，2026-11-23，2026-11-24 发布）**：
 - 新增：`migrations/250_report_quality_warnings.sql`（reports.quality_warnings，纯增量）、`migrations/251_prompt_audit_user_text.sql`（prompt_audit_events.user_text，纯增量）、`service/report_quality.go`（+`_test.go`）、`service/report_material_test.go`
 - 修改：`securityaudit/prompt_snapshot.go`（`buildFullPromptFromScanText` 按段分配预算 + `LatestUserTextFromScanText`）、`securityaudit/prompt_worker.go`（从 scanText 重算 FullPrompt/UserText）、`securityaudit/prompt_repository.go`（INSERT 增列）、`securityaudit/prompt_types.go`（PromptSnapshot.UserText）、`service/report_service.go`（`buildSummary` 拆为 `buildSummaryPrompt` + `completeCheckedReport`、窗口采样重写 + 降噪打分、总量预算、推送幂等）、`service/report.go`（UserPromptSnippet.CleanText）、`domain/report.go`（QualityWarnings + ErrReportSensitiveContent）、`ent/schema/report.go`（quality_warnings，含 ent 生成物）、`repository/report_repo.go`（user_text 读取 + 双快照）、`handler/dto/report.go`、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（⚠️ 质量提示徽标）、i18n zh/en `push.qualityWarn`
 
-**日报附节（v4.3，2026-11-24，未发布）**：
+**日报附节（v4.3，2026-11-24，2026-11-24 发布）**：
 - 新增：`service/report_annex_test.go`
 - 修改：`service/report_service.go`（`reportWindows`、`reportDailyCutoff`、`reportDailyWindow`、`resolveReportWindows`、`GenerateReport`/`GenerateForAllUsers` 双窗口、`buildSummaryPrompt`/`collectReportMaterials`/`trimReportMaterials` 附节素材、`reportSystemPrompt` 附节指令）、`service/report_quality.go`（附节 regex、`splitReportAnnex`、`normalizeReportAnnex`、附节质量规则）、`domain/report.go`（`ReportStats.AnnexRequests`，JSON 字段无需迁移）、前端 `api/admin/reports.ts`、`views/{admin,user}/ReportsView.vue`（periodLabel + annexRequests 展示）、i18n zh/en（`stats.annexRequests`、`config.scheduleHint`）
 
@@ -342,7 +342,7 @@ docker compose up -d sub2api
 - 测试：新增 service 多群路由单测（去重、部分失败隔离、无群组、opt-in/类型开关、测试卡片、创建校验）；go build/vet + service/repository/handler/routes 全绿；vue-tsc EXIT=0；dev 33336 迁移后核对「计算群」13 人、投递表为空；stable 33333 发布 healthy、HTTP 200、前端 chunk 含新逻辑
 - 发布顺序：dev 启动先在共享库跑迁移 → 验证 → 备份 `sub2api:stable-backup-20261119-1459` → `sub2api:dev` 打 stable → 重建生产；旧 settings webhook 保留，可回滚
 
-### v4.2：报告素材与质量闭环（2026-11-23 dev 已验证，待发布 stable）
+### v4.2：报告素材与质量闭环（2026-11-23 dev 已验证，2026-11-24 随 v4.3 发布 stable）
 
 > 背景：对照 §8 审查遗留，修四类 P0 缺陷。它们共同决定"报告内容对不对"——素材进不来正确的东西、垃圾条目没人拦、同周期还会重复刷群。
 > 决策（用户确认）：①截断配额取 **头 8k + 尾 56k**；②质量不合格时**照发 + ⚠️ 标记**（不扣住，漏报比质量差更伤信任），敏感信息例外。
@@ -362,13 +362,13 @@ docker compose up -d sub2api
 - [x] **线上实测**（dev 33336，用真实流量核对新格式）：32 条新格式事件平均 **53.9k 字符**、p50 **65,536**（预算用满）、无一条塌缩到 5k 以下、`available_skills` 残留 1/22；`FetchPromptSnapshots` 实测 8 个 session → 16 行（latest+mid）
 - [x] **验证中发现并修复两个真实缺陷**（改前单元测试全绿也看不出来）：①尾部取块时"最后一块太短"直接 `break`，导致整段尾部被丢弃、素材塌缩到 **1.9k 字符**——改为 `continue` 继续往前找；②尾部块数硬限 24 块，而块平均只有几百字，**65k 预算只用掉 16k**——改为只按预算停
 - [x] **dev 验证已完成**（2026-11-23）：迁移 250/251 已在共享库生效（纯增量、旧镜像兼容），33336 health 200、无 panic/ERROR，前端 chunk 含质量徽标，真实流量核对存储格式与 user_text
-- [ ] **待办：发布 stable**。顺序同 §4.2（备份 `sub2api:stable-backup-<时间>` → dev 镜像打 stable → 重建 33333 → `/health` 校验），发布后 `git push fork`
+- [x] **已发布 stable（2026-11-24）**：v4.2 与 v4.3 一起发布；备份 `sub2api:stable-backup-20261124-1315` → `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index hash 与 dev 一致；commit `84adf1144` 已 push fork
 
 **已知未做（明确留到后续，不阻塞本次发布）**：
 - **报告里显示「素材覆盖率」**：生成时记下"有效素材字符 / 原始上下文字符"，前端/卡片展示，让人自己判断报告可信度。属于体验增强，不是缺陷。
 - **审计扫描器故障 `prompt_guard_unavailable`**：2026-11-23 排查时发现近 24h 全部 48,618 条审计事件都是 `scan_failed:prompt_guard_unavailable`（风险扫描实际处于关闭状态）。**与日报链路无关**（v3.5 降级落库保证消息仍完整保存，日报素材不受影响），但属于独立的生产问题，需单独排查审计节点（MiniMax 账号 id=5 / 端点 / key）。
 
-### v4.3：日报附节「昨晚 20:00 后补充」（D 方案，2026-11-24 代码已实现，dev 启动冒烟与真实流量生成验证通过）
+### v4.3：日报附节「昨晚 20:00 后补充」（D 方案，2026-11-24 已发布 stable）
 
 > 背景：生产日报在 20:00 生成（库内 `report_config` 当前 `0 20 * * *`、`skip_holidays=false`），当天 20:00–24:00 的使用不会进当晚报告，也不会自动滚进次日。实测近 7 天 11-18 有 24.7%、11-22 有 66.7% 的请求发生在 20:00 后；11-22 当晚 3 份日报都是 20:00 生成的，那晚大部分工作不在里面。
 > 决策（用户确认，D 方案）：**20:00 照发主日报；20:00 后的工作写进次日日报末尾的附节**，不额外发卡片、不延迟主日报。
@@ -421,7 +421,7 @@ docker compose up -d sub2api
 - 节假日模式边界：附节依赖「次日有日报」。`skip_holidays=true` 时周末/节假日次日不生成日报，该晚 20:00 后的数据不会被附节覆盖（仍按现有「周末手动重生成」处理）；当前生产 `skip_holidays=false`，不受影响。
 - 历史数据：只影响新生成的报告；旧报告不自动加附节，重生成时按新口径。v1 不加数据库列（附节是 `ai_summary` 的一部分）。
 
-**改造清单（代码已完成，dev 启动冒烟与真实流量生成验证通过，待发布 stable）**
+**改造清单（已完成，2026-11-24 发布 stable）**
 
 - [x] 新增 `resolveReportWindows`/`reportDailyWindow`/`reportDailyCutoff`：日报正文 `[D 00:00, D 切点)`、附节 `[D-1 切点, D 00:00)`，cutoff 取 `DailySchedule` 时分；周/月沿用 `ReportPeriod`
 - [x] `GenerateReport` 日报路径分别取两组素材；主素材预算 80k 不变，附节独立 20k；`reportSystemPrompt` 日报分支加附节格式与规则
@@ -434,7 +434,8 @@ docker compose up -d sub2api
 - [x] dev 33336：buildx 构建 `sub2api:dev` → 重建容器 → `/health` 200、无 panic/ERROR；前端二进制已含 `annexRequests`/`截至` 新逻辑
 - [x] **真实流量生成验证**（dev 33336 admin 手动，user 7 / 2026-11-20）：正文 5 条、附节 33 条，与 `usage_logs` 两窗口计数完全一致；附节内容命中 11-19 20:00–24:00 prompt（IdeaToDoc/宣传片）；`period_end=20:00`、`pushed_at` 为空（手动不自动推）；质量校验无警告；验证后已删除测试报告 854
 - [x] 补跑切点单测（22:00 补跑正文仍切 20:00）与飞书附节加粗转换单测
-- [ ] 定时 20:00 自动推送实跑/飞书群实际卡片待发布后观察（避免测试期打扰真实群）
+- [x] **发布 stable（2026-11-24）**：备份 `sub2api:stable-backup-20261124-1315` → `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index hash 与 dev 一致（`index-DESiiRsY.js`）；commit `84adf1144` 已 push fork
+- [ ] 定时 20:00 自动推送实跑/飞书群实际卡片待 2026-11-24 20:00 后观察（上线后首个定时周期）
 
 **已定取舍（不再讨论）**
 
