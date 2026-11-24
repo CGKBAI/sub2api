@@ -518,7 +518,7 @@ docker compose up -d sub2api
 - `go build ./...`、`go vet`、`go test ./internal/service/...` 全绿；前端 `vue-tsc`、i18n 完整性测试通过。
 - dev 33336 启动执行迁移 252，`report_retry_tasks` 表/索引/约束正确；手工事务验证 generation/push UPSERT 与部分唯一索引。
 - 临时插入 generation/push 任务，admin 报告列表正确返回 `generation_retry_status`/`retry_status`；验证后删除，表恢复为空。
-- 发布：备份 `sub2api:stable-backup-20261124-1735`（v4.4 stable）→ `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index `index-DUDskspr.js` 与 dev 一致；生产日志出现 `[ReportRetry] scheduler started (tick=1m, retry_interval=30m)`。
+- 发布：备份 `sub2api:stable-backup-20261124-1735`（v4.4 stable）→ `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index `index-DUDskspr.js` 与 dev 一致；生产日志出现 `[ReportRetry] scheduler started (tick=1m, retry_interval=30m)`；commit `928433fcd` 已 push fork。
 - [ ] 首次真实 LLM/飞书失败后观察 30 分钟重试、部分群补发、永久错误 `manual_repair` 停止。
 
 ### 后续迭代
