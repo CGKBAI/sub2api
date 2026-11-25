@@ -388,6 +388,29 @@ func (r *reportRepository) ListActiveUserIDs(ctx context.Context, start, end tim
 	return out, rows.Err()
 }
 
+// ListGeneratedUserIDs 列出该周期已有成功报告（status=done）的用户，用于批量生成上账时跳过已完成的人。
+func (r *reportRepository) ListGeneratedUserIDs(ctx context.Context, reportType string, periodStart time.Time) (map[int64]struct{}, error) {
+	client := clientFromContext(ctx, r.client)
+	rows, err := client.QueryContext(ctx, `
+		SELECT user_id FROM reports
+		WHERE type = $1 AND period_start = $2 AND status = 'done'
+	`, reportType, periodStart)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[int64]struct{}, 16)
+	for rows.Next() {
+		var uid int64
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		out[uid] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
 // GetUsername 查询用户显示名（users.username，报告标题用）。
 // 用户不存在或已删除时返回空串（标题退化为不带姓名）。
 func (r *reportRepository) GetUsername(ctx context.Context, userID int64) (string, error) {

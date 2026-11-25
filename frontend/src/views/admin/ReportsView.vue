@@ -7,7 +7,9 @@ import reportsAPI, {
   type Report,
   type ReportLLMConfig,
   type ReportType,
-  type ReportFeishuGroup
+  type ReportFeishuGroup,
+  type ReportTaskItem,
+  type ReportTaskSummary
 } from '@/api/admin/reports'
 import { list as listAdminUsers } from '@/api/admin/users'
 import type { AdminUser } from '@/types'
@@ -65,6 +67,75 @@ const activeDate = computed(() => {
 const generatingAll = ref(false)
 const generatingUserId = ref<number | null>(null)
 const pushingReportId = ref<number | null>(null)
+
+// 生成任务队列：某周期每个用户最新一条任务的状态汇总（谁完成、谁没轮到）。
+const taskSummary = ref<ReportTaskSummary | null>(null)
+const taskSummaryLoading = ref(false)
+const taskExpanded = ref(false)
+const retryingTasks = ref(false)
+
+async function loadTaskSummary() {
+  if (activeTab.value === 'groups') {
+    taskSummary.value = null
+    return
+  }
+  taskSummaryLoading.value = true
+  try {
+    taskSummary.value = await reportsAPI.taskSummary({
+      type: activeReportType.value,
+      date: activeDate.value || undefined
+    })
+  } catch {
+    taskSummary.value = null
+  } finally {
+    taskSummaryLoading.value = false
+  }
+}
+
+async function retryUnfinished() {
+  retryingTasks.value = true
+  try {
+    const res = await reportsAPI.retryTasks({
+      type: activeReportType.value,
+      date: activeDate.value || undefined
+    })
+    appStore.showSuccess(t('admin.reports.taskSummary.requeued', { n: res.reset }))
+    await loadTaskSummary()
+  } catch (error: any) {
+    appStore.showError(error?.message || String(error))
+  } finally {
+    retryingTasks.value = false
+  }
+}
+
+const taskStatItems = computed(() => {
+  const s = taskSummary.value
+  if (!s) return []
+  return [
+    { key: 'total', label: t('admin.reports.taskSummary.total'), value: s.total, cls: 'bg-gray-100 text-gray-700 dark:bg-dark-800 dark:text-gray-200' },
+    { key: 'done', label: t('admin.reports.taskSummary.done'), value: s.done, cls: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' },
+    { key: 'running', label: t('admin.reports.taskSummary.running'), value: s.running, cls: 'bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300' },
+    { key: 'pending', label: t('admin.reports.taskSummary.pending'), value: s.pending, cls: 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300' },
+    { key: 'failed', label: t('admin.reports.taskSummary.failed'), value: s.failed, cls: 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300' },
+    { key: 'manual', label: t('admin.reports.taskSummary.manualRepair'), value: s.manual_repair, cls: 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300' },
+    { key: 'skipped', label: t('admin.reports.taskSummary.skipped'), value: s.skipped, cls: 'bg-gray-100 text-gray-500 dark:bg-dark-800 dark:text-gray-400' }
+  ]
+})
+
+function taskStatusLabel(status: ReportTaskItem['status']): string {
+  switch (status) {
+    case 'pending':
+      return t('admin.reports.taskSummary.statusPending')
+    case 'failed':
+      return t('admin.reports.taskSummary.statusFailed')
+    case 'manual_repair':
+      return t('admin.reports.taskSummary.statusManual')
+    case 'skipped':
+      return t('admin.reports.taskSummary.statusSkipped')
+    default:
+      return t('admin.reports.taskSummary.statusDone')
+  }
+}
 
 // 节假日感知开关（页头按钮）：
 // 开=日报工作日/周报本周最后工作日/月报当月首个工作日出上月；
@@ -311,15 +382,19 @@ async function load() {
 
 watch([activeTab, dailyDate, weeklyDate, monthlyDate, userIdFilter], () => {
   page.value = 1
+  taskExpanded.value = false
   if (activeTab.value === 'groups') {
+    taskSummary.value = null
     loadGroups()
     return
   }
   load()
+  loadTaskSummary()
 })
 
 onMounted(() => {
   load()
+  loadTaskSummary()
   loadHolidayAware()
 })
 
@@ -332,6 +407,7 @@ async function generateAll() {
     })
     appStore.showSuccess(`${res.generated}`)
     await load()
+    await loadTaskSummary()
   } catch (error: any) {
     appStore.showError(error?.message || String(error))
   } finally {
@@ -526,6 +602,79 @@ const statusBadge = computed(() => (status: string) => {
             class="input w-40 text-sm"
           />
         </div>
+      </div>
+
+      <!-- 生成进度（任务队列）：谁完成、谁在跑、谁没轮到 -->
+      <div
+        v-if="activeTab !== 'groups' && (taskSummary || taskSummaryLoading)"
+        class="card p-4"
+      >
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="text-sm font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.reports.taskSummary.title') }}
+            </h2>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{
+                taskSummary && taskSummary.total > 0
+                  ? t('admin.reports.taskSummary.hint', { total: taskSummary.total })
+                  : t('admin.reports.taskSummary.empty')
+              }}
+            </p>
+          </div>
+          <button
+            class="btn btn-secondary btn-sm"
+            :disabled="retryingTasks || !taskSummary || taskSummary.pending + taskSummary.running + taskSummary.failed + taskSummary.manual_repair === 0"
+            @click="retryUnfinished"
+          >
+            {{ retryingTasks ? t('admin.reports.taskSummary.retrying') : t('admin.reports.taskSummary.retryAll') }}
+          </button>
+        </div>
+
+        <div v-if="taskSummary" class="mt-3 flex flex-wrap gap-2 text-xs">
+          <span
+            v-for="item in taskStatItems"
+            :key="item.key"
+            class="rounded-md px-2 py-1 tabular-nums"
+            :class="item.cls"
+          >
+            {{ item.label }} <span class="font-semibold">{{ item.value }}</span>
+          </span>
+        </div>
+
+        <template v-if="taskSummary && taskSummary.items.length > 0">
+          <button
+            type="button"
+            class="mt-3 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            @click="taskExpanded = !taskExpanded"
+          >
+            {{
+              taskExpanded
+                ? t('admin.reports.taskSummary.collapse')
+                : t('admin.reports.taskSummary.expand', { n: taskSummary.items.length })
+            }}
+          </button>
+          <ul v-if="taskExpanded" class="mt-2 divide-y divide-gray-100 text-xs dark:divide-dark-700/60">
+            <li
+              v-for="item in taskSummary.items"
+              :key="item.user_id"
+              class="flex flex-wrap items-center gap-2 py-1.5"
+            >
+              <span class="font-medium text-gray-800 dark:text-gray-200">
+                {{ item.username || `#${item.user_id}` }}
+              </span>
+              <span class="rounded px-1.5 py-0.5 bg-gray-100 text-gray-600 dark:bg-dark-800 dark:text-gray-300">
+                {{ taskStatusLabel(item.status) }}
+              </span>
+              <span v-if="item.attempts > 0" class="text-gray-400">
+                {{ t('admin.reports.taskSummary.attempts', { n: item.attempts }) }}
+              </span>
+              <span v-if="item.last_error" class="min-w-0 flex-1 truncate text-red-500" :title="item.last_error">
+                {{ item.last_error }}
+              </span>
+            </li>
+          </ul>
+        </template>
       </div>
 
       <!-- 报告群组管理 -->

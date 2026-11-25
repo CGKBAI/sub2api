@@ -6,6 +6,49 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
+// ReportTaskItem 生成任务名单中的一行（管理端「未完成」展开用）。
+type ReportTaskItem struct {
+	UserID      int64      `json:"user_id"`
+	Username    string     `json:"username"`
+	Status      string     `json:"status"`
+	Outcome     string     `json:"outcome,omitempty"`
+	Attempts    int        `json:"attempts"`
+	LastError   string     `json:"last_error,omitempty"`
+	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
+}
+
+// ReportTaskSummary 某周期报告生成进度（每个用户取最新一条任务）。
+type ReportTaskSummary struct {
+	Type         string           `json:"type"`
+	PeriodStart  time.Time        `json:"period_start"`
+	Total        int              `json:"total"`
+	Done         int              `json:"done"`
+	Pending      int              `json:"pending"`
+	Running      int              `json:"running"`
+	Skipped      int              `json:"skipped"`
+	Failed       int              `json:"failed"`
+	ManualRepair int              `json:"manual_repair"`
+	Items        []ReportTaskItem `json:"items"`
+}
+
+// ReportTaskSummaryFromService 从服务层实体转换。
+func ReportTaskSummaryFromService(s service.ReportTaskSummary) *ReportTaskSummary {
+	out := &ReportTaskSummary{
+		Type: s.Type, PeriodStart: s.PeriodStart, Total: s.Total, Done: s.Done,
+		Pending: s.Pending, Running: s.Running, Skipped: s.Skipped,
+		Failed: s.Failed, ManualRepair: s.ManualRepair,
+		Items: make([]ReportTaskItem, 0, len(s.Items)),
+	}
+	for _, item := range s.Items {
+		out.Items = append(out.Items, ReportTaskItem{
+			UserID: item.UserID, Username: item.Username, Status: item.Status,
+			Outcome: item.Outcome, Attempts: item.Attempts, LastError: item.LastError,
+			NextRetryAt: item.NextRetryAt,
+		})
+	}
+	return out
+}
+
 // Report 是日报/周报的对外 JSON 结构。
 type Report struct {
 	ID          int64               `json:"id"`

@@ -156,10 +156,71 @@ func (h *ReportHandler) GenerateAll(c *gin.Context) {
 		response.ErrorFrom(c, firstErr)
 		return
 	}
-	response.Success(c, gin.H{
+	// 返回本轮的生成统计；pending>0 表示预算内没跑完，后台 worker 会继续（不会丢）。
+	sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
+	summary, summaryErr := h.reportService.ReportTaskSummaryFor(sctx, req.Type, ref)
+	scancel()
+	resp := gin.H{
 		"generated": generated,
 		"error":     errorString(firstErr),
-	})
+	}
+	if summaryErr == nil {
+		resp["pending"] = summary.Pending + summary.Running
+		resp["skipped"] = summary.Skipped
+		resp["failed"] = summary.Failed
+		resp["manual_repair"] = summary.ManualRepair
+		resp["total"] = summary.Total
+	}
+	response.Success(c, resp)
+}
+
+// TaskSummary 返回某周期每个用户最新生成任务的状态分布与未完成名单。
+// GET /api/v1/admin/reports/tasks/summary?type=daily&date=YYYY-MM-DD
+func (h *ReportHandler) TaskSummary(c *gin.Context) {
+	reportType := strings.TrimSpace(c.Query("type"))
+	if reportType == "" {
+		reportType = service.ReportTypeDaily
+	}
+	if reportType != service.ReportTypeDaily && reportType != service.ReportTypeWeekly && reportType != service.ReportTypeMonthly {
+		response.BadRequest(c, "Invalid report type")
+		return
+	}
+	ref, ok := reportRefDate(c, c.Query("date"))
+	if !ok {
+		return
+	}
+	summary, err := h.reportService.ReportTaskSummaryFor(c.Request.Context(), reportType, ref)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.ReportTaskSummaryFromService(summary))
+}
+
+type retryReportTasksRequest struct {
+	Type     string   `json:"type" binding:"required,oneof=daily weekly monthly"`
+	Date     string   `json:"date" binding:"omitempty,datetime=2006-01-02"`
+	Statuses []string `json:"statuses"`
+}
+
+// RetryTasks 把该周期未完成的任务重新置为 pending（管理端「补跑未完成」）。
+// POST /api/v1/admin/reports/tasks/retry
+func (h *ReportHandler) RetryTasks(c *gin.Context) {
+	var req retryReportTasksRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	ref, ok := reportRefDate(c, req.Date)
+	if !ok {
+		return
+	}
+	reset, err := h.reportService.ResetReportTasks(c.Request.Context(), req.Type, ref, req.Statuses)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"reset": reset})
 }
 
 // GetConfig handles reading report LLM config

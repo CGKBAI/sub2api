@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-11-25（**提示词审计扫描器已恢复**：根因 MiniMax `MiniMax-M2` 下线 + base_url 缺 `/v1` + 编码套餐 key RPM 低；已切 DeepSeek `deepseek-chat`、`input_limit=16000`、`worker_count=2`，新配置任务 0 失败。v4.5 报告生成/推送重试仍为当前生产版本。见 §8「生产修复：提示词审计扫描器恢复」）。
+> 本文档是完整项目上下文。最后更新：2026-11-25（**报告生成任务队列 v4.6**：批量生成改为「先上账、再干活」——每个用户每周期先写一条 pending 任务，worker 带租约并发 4 路领取；进程重启/预算耗尽/某个用户卡住都会自动续跑，管理端可看「今天还有几个人没生成」。提示词审计扫描器已于同日恢复：根因 MiniMax `MiniMax-M2` 下线 + base_url 缺 `/v1` + 编码套餐 key RPM 低；已切 DeepSeek `deepseek-chat`、`input_limit=16000`、`worker_count=2`，新配置任务 0 失败。见 §8「v4.6」与「生产修复：提示词审计扫描器恢复」）。
 
 ## 1. 功能与当前状态总览
 
@@ -22,6 +22,7 @@
 14. ✅ **日报滚动 24h 窗口 v4.4**（2026-11-24 已发布 stable）：日报覆盖 `[D-1 切点, D 切点)`，切点取 `DailySchedule` 时分（当前 20:00）；前晚工作直接进「今日核心工作」，**不再有附节/`annex_requests`**；统计、活跃用户、请求阈值统一用该 24h 窗口；`period_start` 保持 D 00:00（唯一键/日期筛选不变）、`period_end` 为 D 切点；见 §8 v4.4
 15. ✅ **报告生成/推送失败重试 v4.5**（2026-11-24 已发布 stable）：LLM 瞬时失败每 30 分钟重试生成（定时成功后自动推、手动只更新 Web）；飞书按「报告×群」重试失败投递，已成功群/同一 webhook 不重发；有旧成功报告时保留旧报告、只补推漏掉的群；永久错误（401/403/404、key/模型/webhook 配置）标记「需人工修复」并停止重试；见 §8 v4.5
 16. ✅ **提示词审计扫描器恢复**（2026-11-25）：根因 MiniMax `MiniMax-M2` 下线（404）+ base_url 缺 `/v1` + 编码套餐 key RPM 低（429）；已切 DeepSeek `https://api.deepseek.com/v1` + `deepseek-chat`，`input_limit=16000`、`worker_count=2`；新配置任务 0 失败，旧降级任务自然排空。见 §8「生产修复」
+17. ✅ **报告生成任务队列 v4.6**（2026-11-25，dev 已验证，待发布）：批量生成由「串行 for 循环」改为「任务表」——每用户每周期先上账 `pending`，worker 带 8 分钟租约并发 4 路领取；`pending/done/skipped/failed/manual_repair`（`running` 由租约派生，不落库）；重试上限 6 次后转 `failed`；管理端新增「生成进度」卡片与「补跑未完成」按钮。根因：旧实现里「没轮到」的用户既没有报告也没有记录，进程重启/30 分钟预算耗尽后当天不再补跑。见 §8 v4.6
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -521,6 +522,44 @@ docker compose up -d sub2api
 - 临时插入 generation/push 任务，admin 报告列表正确返回 `generation_retry_status`/`retry_status`；验证后删除，表恢复为空。
 - 发布：备份 `sub2api:stable-backup-20261124-1735`（v4.4 stable）→ `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index `index-DUDskspr.js` 与 dev 一致；生产日志出现 `[ReportRetry] scheduler started (tick=1m, retry_interval=30m)`；commit `928433fcd` 已 push fork。
 - [ ] 首次真实 LLM/飞书失败后观察 30 分钟重试、部分群补发、永久错误 `manual_repair` 停止。
+
+### v4.6：报告生成任务队列（2026-11-25 dev 已验证，待发布）
+
+> 背景：`GenerateForAllUsers` 是「内存名单 + 串行 for 循环」。三种情况下尾部用户既没有报告、也没有失败记录，因此不会进入 v4.5 的生成重试队列：
+> ① 30 分钟批预算耗尽；② 进程中途重启；③ 某个用户卡在 120s LLM 超时上拖住整队。
+> 而且调度器在跑批**之前**就写 `last_run`，当天不会再触发，事后无法区分「没轮到」和「用量低被跳过」。
+
+**设计（关键决策）**
+
+- **复用 `report_retry_tasks`**，语义从「失败重试」扩展为「生成任务」，不新建表（省掉唯一索引/UPSERT/重试调度/前端徽标）。
+- **`running` 不落库**：`status=pending` 且 `lease_until > now()` 即视为正在生成。原因：修改 `idx_report_retry_tasks_generation_active` 的谓词会让滚动/回滚期间**旧镜像**的 `ON CONFLICT ... WHERE status IN ('pending','manual_repair')` 找不到匹配索引而报错。加列是纯增量，零兼容风险。
+- **状态**：`pending / done / skipped / failed / manual_repair`；`skipped` 独立于 `failed`（无用量/低于日报阈值/已有成功报告不算失败，不触发告警）。
+- **重试**：瞬时错误 → `pending + next_retry_at=+30min`，`attempts+1`；**上限 6 次**后转 `failed`；永久错误（401/403/404、敏感内容、非法类型）→ `manual_repair`；预算取消不计次，1 分钟后重排。
+- **`skipped` 不在报告列表展示**（只进任务台账），避免列表被低用量用户刷屏。
+
+**实现**
+
+- 迁移 `253_report_generation_tasks.sql`（纯增量）：`lease_owner/lease_until/outcome/suppress_push/last_attempt_at` 五列；CHECK 放宽到五种状态；新增 `idx_report_retry_tasks_lease`；**不动** generation_active 唯一索引谓词。
+- 仓储 `report_retry_repo.go`：`InsertPending`（幂等上账）、`InsertCompleted`（已有成功报告补 done 台账，让「应生成 N 人」完整）、`ClaimGeneration`（`FOR UPDATE SKIP LOCKED` + 租约）、`FinishGeneration`（写结局、可选 `attempts+1`、释放租约）、`SummarizeByPeriod`（每用户最新一条）、`ListByPeriod`、`ResetByPeriod`（含被取代旧任务收尾，避免唯一索引冲突）。
+  - **领取顺序带类型优先级**：`daily → weekly → monthly`。因为三种类型现在会在同一分钟内一起上账，若乱序执行，周报/月报会聚合到还缺当天子报告的数据（旧实现是「日报跑完才跑周报」的隐式顺序）。同类型内按 `next_retry_at, id`。
+- 服务 `report_tasks.go`：`MaterializeReportTasks`（上账；定时批次跳过已完成用户，手动批次保持「整体重生成」语义）、`RunGenerationTasks`（每轮领 4 条并发执行，到预算就停）、`ProcessReportTask`（结局分类）、`ReportTaskSummaryFor`、`ResetReportTasks`。
+- `GenerateReport` 拆出 `generateReport(..., manageRetry bool)`：任务路径不再写重试任务，由 claim/finish 统一计次，避免 attempts 双增。
+- 调度器：`report_scheduler.go` 只调 `MaterializeReportTasks`（2 分钟预算），不再同步跑批；`report_retry_scheduler.go` 每轮先 `RunGenerationTasks`（8 分钟预算、并发 4）再处理推送重试，run 预算 12 分钟。
+- 顺带修复：重试时 `suppressAutoPush` 之前硬编码 `false`，会把「周报/月报发布日被抑制的日报」推出去；现在任务表带 `suppress_push`。
+- 接口：`GET /admin/reports/tasks/summary`、`POST /admin/reports/tasks/retry`；`generate-all` 返回值增加 `pending/skipped/failed/manual_repair/total`（旧字段保留）。
+- 前端：报告页新增「生成进度」卡片（应生成/完成/生成中/待生成/失败/需人工/已跳过 + 未完成名单展开 + 补跑按钮），i18n zh/en。
+- 权限：补跑按钮沿用 admin 路由组，**所有 admin 可用**（与 generate-all 一致）。
+
+**验证（2026-11-25）**
+
+- `go build ./...`、`go vet`（service/repository/handler）全绿；`go test ./internal/service ./internal/handler/... ./internal/repository ./migrations` 全绿。
+- 新增用例 `report_tasks_test.go`：上账幂等/跳过已完成、成功→done、无用量→skipped、500→pending+30min、404→manual_repair、6 次→failed、ctx 取消不计次、预算为 0 时全部保持 pending 且无租约、只重置未完成任务。
+- 迁移测试 `253_report_generation_tasks_test.go`：断言纯增量（无 DROP INDEX/ALTER COLUMN/DROP COLUMN）。
+- 前端 `vue-tsc --noEmit` EXIT=0。
+- dev 33336 已启动并执行迁移 253；五列/CHECK/索引核对通过；用真实 schema 的事务验证了 `InsertPending` 幂等、`ClaimGeneration` 领租约、汇总计数 `running`、`FinishGeneration`、`ResetByPeriod`、`ListByPeriod` 的 SQL 形态。
+- 新旧路由：`/tasks/summary`、`/tasks/retry` 返回 401（未登录）而非 404，确认已注册。
+- 生产旧镜像在迁移后继续正常运行，无 `report_retry` 相关报错（纯增量兼容）。
+- **待发布后观察**：20:00 定时批次是否按预期上账；`select * from report_retry_tasks ...` 对账 `done` 数 = `reports` 当日 done 数；崩溃续跑（可 kill 进程模拟）。
 
 ### 生产修复：提示词审计扫描器恢复（2026-11-25）
 

@@ -101,6 +101,29 @@ export interface ReportLLMConfig {
   feishu_push_monthly: boolean
 }
 
+export interface ReportTaskItem {
+  user_id: number
+  username: string
+  status: 'pending' | 'manual_repair' | 'failed' | 'skipped' | 'done'
+  outcome?: string
+  attempts: number
+  last_error?: string
+  next_retry_at?: string
+}
+
+export interface ReportTaskSummary {
+  type: ReportType
+  period_start: string
+  total: number
+  done: number
+  pending: number
+  running: number
+  skipped: number
+  failed: number
+  manual_repair: number
+  items: ReportTaskItem[]
+}
+
 export interface ReportListFilters {
   type?: ReportType
   user_id?: number
@@ -136,15 +159,42 @@ export async function generate(request: {
   return data
 }
 
+export interface GenerateAllResult {
+  generated: number
+  error: string
+  pending?: number
+  skipped?: number
+  failed?: number
+  manual_repair?: number
+  total?: number
+}
+
 export async function generateAll(request: {
   type: ReportType
   date?: string
-}): Promise<{ generated: number; error: string }> {
-  const { data } = await apiClient.post<{ generated: number; error: string }>(
-    '/admin/reports/generate-all',
-    request,
-    { timeout: GENERATE_ALL_TIMEOUT_MS }
-  )
+}): Promise<GenerateAllResult> {
+  const { data } = await apiClient.post<GenerateAllResult>('/admin/reports/generate-all', request, {
+    timeout: GENERATE_ALL_TIMEOUT_MS
+  })
+  return data
+}
+
+export async function taskSummary(request: {
+  type: ReportType
+  date?: string
+}): Promise<ReportTaskSummary> {
+  const { data } = await apiClient.get<ReportTaskSummary>('/admin/reports/tasks/summary', {
+    params: request
+  })
+  return data
+}
+
+export async function retryTasks(request: {
+  type: ReportType
+  date?: string
+  statuses?: string[]
+}): Promise<{ reset: number }> {
+  const { data } = await apiClient.post<{ reset: number }>('/admin/reports/tasks/retry', request)
   return data
 }
 
@@ -211,6 +261,8 @@ const reportsAPI = {
   getById,
   generate,
   generateAll,
+  taskSummary,
+  retryTasks,
   getConfig,
   updateConfig,
   pushToFeishu,

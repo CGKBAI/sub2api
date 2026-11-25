@@ -55,6 +55,29 @@ export default {
       pushRetrying: 'Push retrying',
       pushManual: 'Needs manual repair'
     },
+    taskSummary: {
+      title: 'Generation progress',
+      hint: '{total} users due this period; unfinished ones retry automatically or can be requeued manually',
+      empty: 'No generation tasks for this period yet (they appear after the scheduled run)',
+      total: 'Due',
+      done: 'Done',
+      running: 'Running',
+      pending: 'Pending',
+      failed: 'Failed',
+      manualRepair: 'Manual',
+      skipped: 'Skipped',
+      retryAll: 'Retry unfinished',
+      retrying: 'Requeued…',
+      requeued: 'Requeued {n} users; the worker will continue automatically',
+      expand: 'Show {n} unfinished',
+      collapse: 'Hide list',
+      attempts: 'attempt {n}',
+      statusPending: 'Pending',
+      statusFailed: 'Failed',
+      statusManual: 'Needs manual repair',
+      statusSkipped: 'Skipped',
+      statusDone: 'Done'
+    },
     goal: {
       title: 'Recent Goals',
       placeholder:

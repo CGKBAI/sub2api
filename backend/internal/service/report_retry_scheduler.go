@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +20,9 @@ const (
 	reportRetrySchedulerLockRenew     = 90 * time.Second
 	reportRetrySchedulerTick          = 1 * time.Minute
 	reportRetrySchedulerBatch         = 50
-	reportRetrySchedulerJobTimeout    = 3 * time.Minute
+	reportRetrySchedulerJobTimeout    = 5 * time.Minute
+	// reportRetrySchedulerRunBudget 单轮总预算：要覆盖生成任务（8 分钟）与推送重试。
+	reportRetrySchedulerRunBudget = 12 * time.Minute
 )
 
 var reportRetrySchedulerReleaseScript = redis.NewScript(`
@@ -121,7 +122,7 @@ func (s *ReportRetrySchedulerService) runOnce() {
 	if s == nil || s.reportService == nil || s.retryRepo == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(s.stopCtx, reportRetrySchedulerJobTimeout*2)
+	ctx, cancel := context.WithTimeout(s.stopCtx, reportRetrySchedulerRunBudget)
 	defer cancel()
 
 	cfg, err := s.reportService.GetReportConfig(ctx)
@@ -140,12 +141,14 @@ func (s *ReportRetrySchedulerService) runOnce() {
 	defer stopRenew()
 
 	now := timezone.Now()
-	if tasks, err := s.retryRepo.ListDue(ctx, domain.ReportRetryKindGeneration, now, reportRetrySchedulerBatch); err != nil {
-		logger.LegacyPrintf("service.report", "[ReportRetry] list due generation tasks: %v", err)
-	} else {
-		for _, task := range tasks {
-			s.processGenerationTask(ctx, task)
-		}
+	// 生成任务（首次尝试 + 失败重试统一走任务表）：带租约并发领取，
+	// 单个任务失败/卡住不影响其他人；本轮预算用尽后剩余任务保持 pending。
+	if result, genErr := s.reportService.RunGenerationTasks(ctx, reportTaskWorkerBudget, reportTaskConcurrency); genErr != nil {
+		logger.LegacyPrintf("service.report", "[ReportRetry] run generation tasks: %v", genErr)
+	} else if result.Processed > 0 {
+		logger.LegacyPrintf("service.report",
+			"[ReportRetry] generation tasks processed=%d generated=%d skipped=%d failed=%d manual=%d rescheduled=%d",
+			result.Processed, result.Generated, result.Skipped, result.Failed, result.ManualRepair, result.Rescheduled)
 	}
 	if tasks, err := s.retryRepo.ListDue(ctx, domain.ReportRetryKindPush, now, reportRetrySchedulerBatch); err != nil {
 		logger.LegacyPrintf("service.report", "[ReportRetry] list due push tasks: %v", err)
@@ -154,60 +157,6 @@ func (s *ReportRetrySchedulerService) runOnce() {
 			s.processPushTask(ctx, task, cfg)
 		}
 	}
-}
-
-func (s *ReportRetrySchedulerService) processGenerationTask(ctx context.Context, task ReportRetryTask) {
-	jobCtx, cancel := context.WithTimeout(ctx, reportRetrySchedulerJobTimeout)
-	defer cancel()
-
-	trigger := ReportTriggerManual
-	if task.AutoPush {
-		trigger = ReportTriggerScheduled
-	}
-	report, err := s.reportService.GenerateReport(jobCtx, task.UserID, task.ReportType, task.PeriodStart, trigger, false)
-	if err != nil {
-		logger.LegacyPrintf("service.report",
-			"[ReportRetry] generation retry failed report=%d user=%d err=%v", task.ReportID, task.UserID, err)
-		// 无报告必要（用户无用量/低用量）或报告不存在：结束任务。
-		if errors.Is(err, ErrReportGenerateUserNotFound) ||
-			errors.Is(err, ErrReportSkippedLowUsage) ||
-			errors.Is(err, domain.ErrReportNotFound) {
-			_ = s.retryRepo.MarkDone(context.Background(), task.ID)
-			return
-		}
-		// 敏感内容/非法类型重试也不会自愈：转人工修复，停止重试。
-		if errors.Is(err, domain.ErrReportSensitiveContent) || errors.Is(err, ErrReportInvalidType) {
-			s.markGenerationManualRepair(ctx, task, err)
-			return
-		}
-		s.rescheduleGeneration(ctx, task, err)
-		return
-	}
-	if report == nil {
-		_ = s.retryRepo.MarkDone(context.Background(), task.ID)
-		return
-	}
-	logger.LegacyPrintf("service.report",
-		"[ReportRetry] generation retry done report=%d user=%d status=%s", report.ID, task.UserID, report.Status)
-}
-
-func (s *ReportRetrySchedulerService) rescheduleGeneration(ctx context.Context, task ReportRetryTask, retryErr error) {
-	next := timezone.Now().Add(reportRetryInterval)
-	updated := task
-	updated.Status = domain.ReportRetryStatusPending
-	updated.LastError = truncateReportError(retryErr.Error())
-	updated.NextRetryAt = &next
-	_, _ = s.retryRepo.UpsertGeneration(ctx, &updated)
-}
-
-func (s *ReportRetrySchedulerService) markGenerationManualRepair(ctx context.Context, task ReportRetryTask, retryErr error) {
-	updated := task
-	updated.Status = domain.ReportRetryStatusManualRepair
-	updated.LastError = truncateReportError(retryErr.Error())
-	updated.NextRetryAt = nil
-	_, _ = s.retryRepo.UpsertGeneration(ctx, &updated)
-	logger.LegacyPrintf("service.report",
-		"[ReportRetry] generation needs manual repair report=%d user=%d err=%v", task.ReportID, task.UserID, retryErr)
 }
 
 func (s *ReportRetrySchedulerService) processPushTask(ctx context.Context, task ReportRetryTask, cfg *ReportLLMConfig) {

@@ -34,8 +34,8 @@ const (
 
 	reportSchedulerTickInterval = 1 * time.Minute
 
-	// 单种报告类型的生成预算（批量串行 LLM 调用）
-	reportSchedulerJobTimeout = 30 * time.Minute
+	// 「上账」预算：只做查询+插入，正常远小于该值；留足余量应对慢查询。
+	reportSchedulerMaterializeTimeout = 2 * time.Minute
 )
 
 var reportSchedulerCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
@@ -241,13 +241,20 @@ func (s *ReportSchedulerService) runOnce() {
 				now.Format("2006-01-02"))
 		}
 
-		genCtx, genCancel := context.WithTimeout(ctx, reportSchedulerJobTimeout)
-		generated, err := s.reportService.GenerateForAllUsers(genCtx, d.reportType, ref, ReportTriggerScheduled, suppressDailyPush)
+		// 只上账，不在这里同步生成：每个活跃用户写一条 pending 任务，
+		// 由报告任务 worker 并发领取执行。这样即使本进程随后重启/预算耗尽，
+		// 未执行的用户仍在表里，下一轮自动继续（不再出现「没轮到就消失」）。
+		genCtx, genCancel := context.WithTimeout(ctx, reportSchedulerMaterializeTimeout)
+		result, err := s.reportService.MaterializeReportTasks(genCtx, d.reportType, ref, ReportTriggerScheduled, suppressDailyPush, true)
 		genCancel()
 		if err != nil {
 			logger.LegacyPrintf("service.report",
-				"[ReportScheduler] generate %s reports: generated=%d err=%v", d.kind, generated, err)
+				"[ReportScheduler] materialize %s reports: %v", d.kind, err)
+			continue
 		}
+		logger.LegacyPrintf("service.report",
+			"[ReportScheduler] materialized %s reports: candidates=%d created=%d existing=%d",
+			d.kind, result.Candidates, result.Created, result.Existing)
 	}
 }
 
@@ -281,7 +288,7 @@ func (s *ReportSchedulerService) evaluateKind(ctx context.Context, kind, spec st
 // skip_holidays=true（节假日感知，默认）：日报=每个工作日；周报=本周（周一~周日）
 // 最后一个工作日，整周全假则该周不出；月报=本月第一个工作日（出上月）。
 // skip_holidays=false：日报=每天（低用量用户由请求阈值过滤）；周报=固定周五
-//（错过当晚可在周末补发）；月报=每月最后一天出当月（错过不跨月补，可手动补）。
+// （错过当晚可在周末补发）；月报=每月最后一天出当月（错过不跨月补，可手动补）。
 func reportDueForDay(kind string, now, genMarker time.Time, skipHolidays bool) bool {
 	switch kind {
 	case "daily":

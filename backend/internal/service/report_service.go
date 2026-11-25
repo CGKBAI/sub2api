@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/google/uuid"
 )
 
 const reportLLMTimeout = 120 * time.Second
@@ -66,6 +67,8 @@ type ReportService struct {
 	settingRepo SettingRepository
 	llm         *reportLLMClient
 	feishu      *reportFeishuClient
+	// taskWorkerID 生成任务租约持有者标识（多实例下用于排查是谁在跑）。
+	taskWorkerID string
 }
 
 // NewReportService 构造报告服务（兼容测试/旧调用，不含重试队列）。
@@ -76,10 +79,11 @@ func NewReportService(reportRepo ReportRepository, groupRepo ReportGroupReposito
 // NewReportServiceWithRetry 构造包含重试队列的报告服务（wire 使用）。
 func NewReportServiceWithRetry(reportRepo ReportRepository, groupRepo ReportGroupRepository, retryRepo ReportRetryRepository, settingRepo SettingRepository) *ReportService {
 	return &ReportService{
-		reportRepo:  reportRepo,
-		groupRepo:   groupRepo,
-		retryRepo:   retryRepo,
-		settingRepo: settingRepo,
+		reportRepo:   reportRepo,
+		groupRepo:    groupRepo,
+		retryRepo:    retryRepo,
+		settingRepo:  settingRepo,
+		taskWorkerID: uuid.NewString(),
 		llm: &reportLLMClient{
 			httpClient: &http.Client{Timeout: reportLLMTimeout + 10*time.Second},
 		},
@@ -189,7 +193,14 @@ func resolveReportWindows(reportType string, ref time.Time, cfg *ReportLLMConfig
 // GenerateReport 为单个用户生成指定周期（日/周/月）的报告。
 // trigger 区分生成来源：manual（管理端/用户手动）永不自动推飞书；
 // scheduled（定时任务）按开关自动推。已存在同周期报告时覆盖更新（手动重试语义）。
+//
+// 任务队列路径（ProcessReportTask）使用 manageRetry=false：重试状态由任务表统一
+// 维护，避免与 claim/finish 重复计数。
 func (s *ReportService) GenerateReport(ctx context.Context, userID int64, reportType string, ref time.Time, trigger ReportTrigger, suppressAutoPush bool) (*Report, error) {
+	return s.generateReport(ctx, userID, reportType, ref, trigger, suppressAutoPush, true)
+}
+
+func (s *ReportService) generateReport(ctx context.Context, userID int64, reportType string, ref time.Time, trigger ReportTrigger, suppressAutoPush bool, manageRetry bool) (*Report, error) {
 	if s == nil || s.reportRepo == nil {
 		return nil, errors.New("report repository not initialized")
 	}
@@ -257,7 +268,9 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 				logger.LegacyPrintf("service.report",
 					"[Report] generate %s report for user %d failed but existing done report preserved: %v",
 					reportType, userID, llmErr)
-				s.clearGenerationRetry(ctx, userID, reportType, windows.ReportStart)
+				if manageRetry {
+					s.clearGenerationRetry(ctx, userID, reportType, windows.ReportStart)
+				}
 				// 旧报告尚未推送成功时，直接补推旧报告到还没成功的群；
 				// 已推送过的个人/群不会重复收到。
 				if autoPush {
@@ -274,8 +287,12 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 			if pErr != nil {
 				return nil, pErr
 			}
-			s.scheduleGenerationRetry(ctx, saved, llmErr, autoPush)
-			return saved, nil
+			if manageRetry {
+				s.scheduleGenerationRetry(ctx, saved, llmErr, autoPush)
+				return saved, nil
+			}
+			// 任务队列路径：把底层错误交给调用方分类（永久错误 / 重试耗尽等）。
+			return saved, llmErr
 		}
 	}
 	if len(qualityWarnings) > 0 {
@@ -291,7 +308,9 @@ func (s *ReportService) GenerateReport(ctx context.Context, userID int64, report
 	if err != nil {
 		return nil, err
 	}
-	s.clearGenerationRetry(ctx, userID, reportType, windows.ReportStart)
+	if manageRetry {
+		s.clearGenerationRetry(ctx, userID, reportType, windows.ReportStart)
+	}
 	// 仅定时生成自动推飞书；手动生成只在 web 展示，由卡片按钮手动推送。
 	if autoPush {
 		s.maybeAutoPushFeishu(ctx, cfg, saved)
@@ -469,8 +488,6 @@ func (s *ReportService) PushUserReport(ctx context.Context, userID, reportID int
 	return report, nil
 }
 
-// GenerateForAllUsers 为周期内所有活跃用户生成报告（scheduler / 管理端手动触发用）。
-// trigger 语义同 GenerateReport。返回成功生成的数量与首个错误。
 // belowDailyMinRequests 判断定时日报是否低于请求阈值（仅节假日感知关闭模式生效）。
 func belowDailyMinRequests(reportType string, trigger ReportTrigger, skipHolidays bool, requests int64) bool {
 	return trigger == ReportTriggerScheduled &&
@@ -479,10 +496,29 @@ func belowDailyMinRequests(reportType string, trigger ReportTrigger, skipHoliday
 		requests <= reportDailyMinRequests
 }
 
+// GenerateForAllUsers 为周期内所有活跃用户生成报告（scheduler / 管理端手动触发用）。
+// trigger 语义同 GenerateReport。返回成功生成的数量与首个错误。
+//
+// 现在走「任务表」：先为每个活跃用户上账一条 pending，再由 worker 带租约并发
+// 领取执行。进程重启、预算耗尽、某个用户卡住都不会让尾部用户凭空消失；
+// 未跑完的任务留在表里，下一轮（或管理端补跑）继续。
 func (s *ReportService) GenerateForAllUsers(ctx context.Context, reportType string, ref time.Time, trigger ReportTrigger, suppressAutoPush bool) (int, error) {
 	if s == nil || s.reportRepo == nil {
 		return 0, errors.New("report repository not initialized")
 	}
+	if s.retryRepo == nil {
+		// 兼容测试/旧装配：没有任务表时退回串行逐用户生成。
+		return s.generateForAllUsersLegacy(ctx, reportType, ref, trigger, suppressAutoPush)
+	}
+	if _, err := s.MaterializeReportTasks(ctx, reportType, ref, trigger, suppressAutoPush, trigger == ReportTriggerScheduled); err != nil {
+		return 0, err
+	}
+	result, err := s.RunGenerationTasks(ctx, reportTaskManualBudget, reportTaskConcurrency)
+	return result.Generated, err
+}
+
+// generateForAllUsersLegacy 是无任务队列时的串行兜底路径。
+func (s *ReportService) generateForAllUsersLegacy(ctx context.Context, reportType string, ref time.Time, trigger ReportTrigger, suppressAutoPush bool) (int, error) {
 	cfg, cfgErr := s.GetReportConfig(ctx)
 	if cfgErr != nil {
 		logger.LegacyPrintf("service.report", "[Report] load config for batch %s: %v", reportType, cfgErr)
