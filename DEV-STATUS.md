@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-11-24（**v4.5 已发布 stable**：新增报告生成/推送失败重试队列——LLM 瞬时失败每 30 分钟重试生成，飞书按报告×群重试失败投递，成功群/同一 webhook 不重发，永久错误标记「需人工修复」停止；v4.4 滚动 24h 窗口保留。发布备份 `sub2api:stable-backup-20261124-1735`，生产 33333 healthy、`/health` 200、前端 index `index-DUDskspr.js` 与 dev 一致，见 §8 v4.5）。
+> 本文档是完整项目上下文。最后更新：2026-11-25（**提示词审计扫描器已恢复**：根因 MiniMax `MiniMax-M2` 下线 + base_url 缺 `/v1` + 编码套餐 key RPM 低；已切 DeepSeek `deepseek-chat`、`input_limit=16000`、`worker_count=2`，新配置任务 0 失败。v4.5 报告生成/推送重试仍为当前生产版本。见 §8「生产修复：提示词审计扫描器恢复」）。
 
 ## 1. 功能与当前状态总览
 
@@ -21,6 +21,7 @@
 13. ⏪ **日报附节「昨晚 20:00 后补充」v4.3**（2026-11-24 曾发布 stable，同日被 v4.4 取代）：20:00–24:00 的工作写进次日日报末尾附节；因群消息冗余，v4.4 改为滚动 24 小时窗口，附节取消。见 §8 v4.3（历史）
 14. ✅ **日报滚动 24h 窗口 v4.4**（2026-11-24 已发布 stable）：日报覆盖 `[D-1 切点, D 切点)`，切点取 `DailySchedule` 时分（当前 20:00）；前晚工作直接进「今日核心工作」，**不再有附节/`annex_requests`**；统计、活跃用户、请求阈值统一用该 24h 窗口；`period_start` 保持 D 00:00（唯一键/日期筛选不变）、`period_end` 为 D 切点；见 §8 v4.4
 15. ✅ **报告生成/推送失败重试 v4.5**（2026-11-24 已发布 stable）：LLM 瞬时失败每 30 分钟重试生成（定时成功后自动推、手动只更新 Web）；飞书按「报告×群」重试失败投递，已成功群/同一 webhook 不重发；有旧成功报告时保留旧报告、只补推漏掉的群；永久错误（401/403/404、key/模型/webhook 配置）标记「需人工修复」并停止重试；见 §8 v4.5
+16. ✅ **提示词审计扫描器恢复**（2026-11-25）：根因 MiniMax `MiniMax-M2` 下线（404）+ base_url 缺 `/v1` + 编码套餐 key RPM 低（429）；已切 DeepSeek `https://api.deepseek.com/v1` + `deepseek-chat`，`input_limit=16000`、`worker_count=2`；新配置任务 0 失败，旧降级任务自然排空。见 §8「生产修复」
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -145,7 +146,7 @@ docker compose up -d sub2api
 | settings key | 当前值 |
 |---|---|
 | `risk_control_enabled` | true |
-| `prompt_audit_config` | 异步审计（async，不阻断），审计节点：**MiniMax** `https://api.minimaxi.com` + `MiniMax-M2`（账号 id=5 的 key，AES-256-GCM 加密存 token_ciphertext，密钥=.env 的 TOTP_ENCRYPTION_KEY），input_limit=2000，timeout=15000ms |
+| `prompt_audit_config` | 异步审计（async，不阻断），审计节点：**DeepSeek** `https://api.deepseek.com/v1` + `deepseek-chat`（2026-11-25 恢复，使用账号 id=8 的 key；AES-256-GCM 加密存 token_ciphertext，密钥=.env 的 TOTP_ENCRYPTION_KEY），input_limit=16000，worker_count=2，timeout=15000ms。**历史**：原 MiniMax `https://api.minimaxi.com` + `MiniMax-M2` 因模型下线（404）+ 缺 `/v1` + 编码套餐 key RPM 偏低导致 `prompt_guard_unavailable` |
 | `report_config` | enabled=true，LLM=同 MiniMax 端点，max_prompts=60，单条截断 800 字符，日报/周报/月报 cron 均 `0 20 * * *`（仅时分生效；2026-11-24 核对生产库），skip_holidays=false（**admin 报告页页头按钮运行时切换**；开=工作日规则，关=日报每天+当日请求>10 条阈值/周报周五/月报月底出当月；存量 JSON 缺字段时 cron 读取自动补默认，代码默认 true，skip_holidays 缺省=false 需 SQL 或按钮显式写入）；飞书仅保留 `feishu_enabled` + 三类型开关，`feishu_webhook_url`/`feishu_secret` 字段保留作回滚兜底但**新代码不再读取**（群组 webhook 见 `report_feishu_groups`） |
 
 配置修改：直接 UPDATE settings 表（ConfigManager 每 5 秒 TTL reload，无需重启）；endpoint token 必须先用 TOTP_ENCRYPTION_KEY 做 AES-256-GCM 加密（base64(nonce+ct+tag)，node crypto 可做）。
@@ -375,7 +376,7 @@ docker compose up -d sub2api
 
 **已知未做（明确留到后续，不阻塞本次发布）**：
 - **报告里显示「素材覆盖率」**：生成时记下"有效素材字符 / 原始上下文字符"，前端/卡片展示，让人自己判断报告可信度。属于体验增强，不是缺陷。
-- **审计扫描器故障 `prompt_guard_unavailable`**：2026-11-23 排查时发现近 24h 全部 48,618 条审计事件都是 `scan_failed:prompt_guard_unavailable`（风险扫描实际处于关闭状态）。**与日报链路无关**（v3.5 降级落库保证消息仍完整保存，日报素材不受影响），但属于独立的生产问题，需单独排查审计节点（MiniMax 账号 id=5 / 端点 / key）。
+- ~~**审计扫描器故障 `prompt_guard_unavailable`**~~：**2026-11-25 已恢复**，根因是 MiniMax `MiniMax-M2` 模型下线（404）+ base_url 缺 `/v1` + 编码套餐 key 的 RPM 偏低（429）；已切 DeepSeek `deepseek-chat`、`input_limit=16000`、`worker_count=2`。见 §8「生产修复：提示词审计扫描器恢复」。
 
 ### v4.3：日报附节「昨晚 20:00 后补充」（D 方案，2026-11-24 曾发布 stable，已由 v4.4 取代）
 
@@ -520,6 +521,42 @@ docker compose up -d sub2api
 - 临时插入 generation/push 任务，admin 报告列表正确返回 `generation_retry_status`/`retry_status`；验证后删除，表恢复为空。
 - 发布：备份 `sub2api:stable-backup-20261124-1735`（v4.4 stable）→ `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index `index-DUDskspr.js` 与 dev 一致；生产日志出现 `[ReportRetry] scheduler started (tick=1m, retry_interval=30m)`；commit `928433fcd` 已 push fork。
 - [ ] 首次真实 LLM/飞书失败后观察 30 分钟重试、部分群补发、永久错误 `manual_repair` 停止。
+
+### 生产修复：提示词审计扫描器恢复（2026-11-25）
+
+> 现象：生产 `prompt_audit.scan_chunk_failed` 持续报 `prompt_guard_unavailable`，事件全部降级为 `scan_failed:prompt_guard_unavailable`；扫描耗时常只有 50ms 左右，说明是上游快速拒绝，不是超时。
+
+**根因（三层叠加）**
+
+1. **base_url 缺 `/v1`**：`https://api.minimaxi.com` + `/chat/completions` → nginx 404。
+2. **模型下线**：`MiniMax-M2` 返回 `The model "MiniMax-M2" is no longer available. (2069)`；`MiniMax-M2.7` 正常。
+3. **编码套餐 key 限流**：修正端点/模型后，部分 chunk 成功，但随后大量 429。实测该 `sk-cp-...` key 顺序 20 次请求约 8 次 200、12 次 429；4 workers × 2000 字符 chunk 会迅速打满 RPM，任务重试耗尽后再次降级。
+
+**修复**
+
+- 2026-11-25 10:52：先把 base_url 改为 `https://api.minimaxi.com/v1`、模型改为 `MiniMax-M2.7`（config_version=2），确认端点/模型可用；仍受 RPM 限制。
+- 2026-11-25 10:55：切换审计节点为 **DeepSeek**：
+  - `base_url=https://api.deepseek.com/v1`
+  - `model=deepseek-chat`
+  - token 使用账号 id=8 的 key，AES-256-GCM 重新加密写入 `token_ciphertext`
+  - `input_limit=16000`（减少 chunk 数）
+  - `worker_count=2`
+  - `timeout_ms=15000`
+  - config_version=3
+- 旧配置备份：`/tmp/prompt_audit_config.backup.json`（仅本机临时文件，关键字段已记录在上方）。
+
+**验证**
+
+- 新 `config_version=3` 任务：`scan_chunk_failed` **0 条**，`scan_chunk_completed` 持续增长；事件 `scanner_version=deepseek-chat`。
+- 仍出现的 `scan_failed` 均来自旧 `config_version 1/2` 任务，属于修复前的重试/降级尾巴，会自然排空。
+- DeepSeek 实测：单条 16k 字符 chunk + 1024 max_tokens 约 0.3s 返回，格式能正确输出 `Safety/Categories`；20 并发 4 worker 全部 200。
+
+**后续建议**
+
+- 当前临时复用账号 id=8 的 DeepSeek key，建议换独立审计 key/额度，避免和用户流量争配额。
+- 增加扫描器请求速率限制/429 退避，避免高并发再次打满。
+- `scan_chunk_failed` 日志补 `http_status`/`retryable` 字段，下次排查更快。
+- 对 `scan_failed:*` 占比加告警（例如 10 分钟 >5%）。
 
 ### 后续迭代
 
