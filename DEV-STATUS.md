@@ -1,6 +1,6 @@
 # sub2api 日报/周报/月报功能 — 项目状态（供新 session 接续）
 
-> 本文档是完整项目上下文。最后更新：2026-11-25（**报告生成任务队列 v4.6**：批量生成改为「先上账、再干活」——每个用户每周期先写一条 pending 任务，worker 带租约并发 4 路领取；进程重启/预算耗尽/某个用户卡住都会自动续跑，管理端可看「今天还有几个人没生成」。提示词审计扫描器已于同日恢复：根因 MiniMax `MiniMax-M2` 下线 + base_url 缺 `/v1` + 编码套餐 key RPM 低；已切 DeepSeek `deepseek-chat`、`input_limit=16000`、`worker_count=2`，新配置任务 0 失败。见 §8「v4.6」与「生产修复：提示词审计扫描器恢复」）。
+> 本文档是完整项目上下文。最后更新：2026-11-25（**报告生成任务队列 v4.6（已发布 stable）**：批量生成改为「先上账、再干活」——每个用户每周期先写一条 pending 任务，worker 带租约并发 4 路领取；进程重启/预算耗尽/某个用户卡住都会自动续跑，管理端可看「今天还有几个人没生成」。提示词审计扫描器已于同日恢复：根因 MiniMax `MiniMax-M2` 下线 + base_url 缺 `/v1` + 编码套餐 key RPM 低；已切 DeepSeek `deepseek-chat`、`input_limit=16000`、`worker_count=2`，新配置任务 0 失败。见 §8「v4.6」与「生产修复：提示词审计扫描器恢复」）。
 
 ## 1. 功能与当前状态总览
 
@@ -22,7 +22,7 @@
 14. ✅ **日报滚动 24h 窗口 v4.4**（2026-11-24 已发布 stable）：日报覆盖 `[D-1 切点, D 切点)`，切点取 `DailySchedule` 时分（当前 20:00）；前晚工作直接进「今日核心工作」，**不再有附节/`annex_requests`**；统计、活跃用户、请求阈值统一用该 24h 窗口；`period_start` 保持 D 00:00（唯一键/日期筛选不变）、`period_end` 为 D 切点；见 §8 v4.4
 15. ✅ **报告生成/推送失败重试 v4.5**（2026-11-24 已发布 stable）：LLM 瞬时失败每 30 分钟重试生成（定时成功后自动推、手动只更新 Web）；飞书按「报告×群」重试失败投递，已成功群/同一 webhook 不重发；有旧成功报告时保留旧报告、只补推漏掉的群；永久错误（401/403/404、key/模型/webhook 配置）标记「需人工修复」并停止重试；见 §8 v4.5
 16. ✅ **提示词审计扫描器恢复**（2026-11-25）：根因 MiniMax `MiniMax-M2` 下线（404）+ base_url 缺 `/v1` + 编码套餐 key RPM 低（429）；已切 DeepSeek `https://api.deepseek.com/v1` + `deepseek-chat`，`input_limit=16000`、`worker_count=2`；新配置任务 0 失败，旧降级任务自然排空。见 §8「生产修复」
-17. ✅ **报告生成任务队列 v4.6**（2026-11-25，dev 已验证，待发布）：批量生成由「串行 for 循环」改为「任务表」——每用户每周期先上账 `pending`，worker 带 8 分钟租约并发 4 路领取；`pending/done/skipped/failed/manual_repair`（`running` 由租约派生，不落库）；重试上限 6 次后转 `failed`；管理端新增「生成进度」卡片与「补跑未完成」按钮。根因：旧实现里「没轮到」的用户既没有报告也没有记录，进程重启/30 分钟预算耗尽后当天不再补跑。见 §8 v4.6
+17. ✅ **报告生成任务队列 v4.6**（2026-11-25 已发布 stable）：批量生成由「串行 for 循环」改为「任务表」——每用户每周期先上账 `pending`，worker 带 8 分钟租约并发 4 路领取；`pending/done/skipped/failed/manual_repair`（`running` 由租约派生，不落库）；重试上限 6 次后转 `failed`；管理端新增「生成进度」卡片与「补跑未完成」按钮。根因：旧实现里「没轮到」的用户既没有报告也没有记录，进程重启/30 分钟预算耗尽后当天不再补跑。见 §8 v4.6
 
 ## 2. 当前部署架构（双实例，共用一套数据）
 
@@ -523,7 +523,7 @@ docker compose up -d sub2api
 - 发布：备份 `sub2api:stable-backup-20261124-1735`（v4.4 stable）→ `sub2api:dev` 打 stable → 重建 33333 → healthy、`/health` 200、前端 index `index-DUDskspr.js` 与 dev 一致；生产日志出现 `[ReportRetry] scheduler started (tick=1m, retry_interval=30m)`；commit `928433fcd` 已 push fork。
 - [ ] 首次真实 LLM/飞书失败后观察 30 分钟重试、部分群补发、永久错误 `manual_repair` 停止。
 
-### v4.6：报告生成任务队列（2026-11-25 dev 已验证，待发布）
+### v4.6：报告生成任务队列（2026-11-25 已发布 stable）
 
 > 背景：`GenerateForAllUsers` 是「内存名单 + 串行 for 循环」。三种情况下尾部用户既没有报告、也没有失败记录，因此不会进入 v4.5 的生成重试队列：
 > ① 30 分钟批预算耗尽；② 进程中途重启；③ 某个用户卡在 120s LLM 超时上拖住整队。
@@ -559,7 +559,10 @@ docker compose up -d sub2api
 - dev 33336 已启动并执行迁移 253；五列/CHECK/索引核对通过；用真实 schema 的事务验证了 `InsertPending` 幂等、`ClaimGeneration` 领租约、汇总计数 `running`、`FinishGeneration`、`ResetByPeriod`、`ListByPeriod` 的 SQL 形态。
 - 新旧路由：`/tasks/summary`、`/tasks/retry` 返回 401（未登录）而非 404，确认已注册。
 - 生产旧镜像在迁移后继续正常运行，无 `report_retry` 相关报错（纯增量兼容）。
-- **待发布后观察**：20:00 定时批次是否按预期上账；`select * from report_retry_tasks ...` 对账 `done` 数 = `reports` 当日 done 数；崩溃续跑（可 kill 进程模拟）。
+- **dev 真实端到端（2026-11-25 14:00）**：临时插入随机 `admin_api_key`（用完即删，未新建用户/未改密码）→ `POST /admin/reports/generate-all {daily, 2026-11-25}`：14 个活跃用户 **45 秒全部生成**，返回 `generated=14,pending=0,failed=0,total=14`；`/tasks/summary` 显示 `done=14`；台账 14 行 `done/generated`、无残留租约；报告 `pushed_at` 全为空（手动批次不推）。随后把 1 条任务改成 `manual_repair` 调 `/tasks/retry` → `reset=1`，状态回到 `pending/attempts=0`。验证后删除当日 14 份报告与任务、删除临时 key，库恢复测试前状态。
+- **崩溃恢复 SQL 验证**：活租约任务领取返回 0 行；租约过期后同一任务被重新领取（`lease_owner` 从 `dead` 变为 `rescuer`）。
+- **发布（2026-11-25 14:00）**：备份 `sub2api:stable-backup-20261125-1400` → `sub2api:dev` 打 stable → 重建 33333；镜像 `094dbcb4991f`、`/health` 200、`[ReportRetry] scheduler started`；新路由返回 401（已注册）；`report_retry_tasks` 为空。
+- **今晚 20:00 观察点**：`[ReportScheduler] materialized daily ... candidates=N created=N`；20:30 后 `select status,count(*) from report_retry_tasks where period_start=<今日> group by 1` 应全为 `done`（低用量用户为 `skipped`）；管理端「生成进度」卡片数字与 `reports` 对账；若 `failed/manual_repair > 0` 点「补跑未完成」。
 
 ### 生产修复：提示词审计扫描器恢复（2026-11-25）
 
